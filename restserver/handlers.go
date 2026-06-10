@@ -55,6 +55,9 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("POST /instances/{id}/webhook", h.setWebhook)
 	mux.HandleFunc("POST /instances/{id}/disconnect", h.disconnect)
 
+	// uazapi wire-compat layer (header auth admintoken/token; see uazapi_compat.go).
+	h.registerUazapiCompat(mux)
+
 	return h.withAuth(mux)
 }
 
@@ -63,7 +66,7 @@ func (h *Handlers) Router() http.Handler {
 // withAuth checks a global API key unless ADMIN_API_KEY is empty. /health is open.
 func (h *Handlers) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.cfg.AdminAPIKey == "" || r.URL.Path == "/health" || r.URL.Path == "/" || r.URL.Path == "/ui" || r.URL.Path == "/webhook" {
+		if h.cfg.AdminAPIKey == "" || r.URL.Path == "/health" || r.URL.Path == "/" || r.URL.Path == "/ui" || r.URL.Path == "/webhook" || isUazapiCompatPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -94,6 +94,25 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 		payload := cloudAPIMessagePayload(rt.metaCopy(), v.Info, text, confirmation)
 		m.webhooks.deliverCloudAPI(gw.URL, gw.AppSecret, payload)
 	}
+
+	// Per-instance uazapi-format webhook (set via POST /webhook compat) — lets the
+	// DietSystem backend consume this service exactly like uazapi (/webhooks/uazapi).
+	in := rt.metaCopy()
+	if in.WebhookURL != "" && in.WebhookEnabled {
+		senderPN, senderLID := resolveSender(v.Info)
+		msg := map[string]any{
+			"messageid":    v.Info.ID,
+			"text":         text,
+			"fromMe":       v.Info.IsFromMe,
+			"wasSentByApi": false,
+			"isGroup":      v.Info.IsGroup,
+			"sender_pn":    senderPN,
+			"sender":       senderLID,
+			"chatid":       v.Info.Chat.String(),
+			"pushName":     v.Info.PushName,
+		}
+		m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
+	}
 }
 
 // digitsOnly strips everything but digits (e.g. "5511...@s.whatsapp.net" -> "5511...").

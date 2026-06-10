@@ -142,6 +142,16 @@ func (s *Store) Get(id string) (Instance, error) {
 	return in, err
 }
 
+// GetByToken resolves an instance by its per-instance token (uazapi-compat layer).
+func (s *Store) GetByToken(token string) (Instance, error) {
+	row := s.db.QueryRow(`SELECT `+instanceCols+` FROM instances WHERE token=?`, token)
+	in, err := scanInstance(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Instance{}, errNotFound
+	}
+	return in, err
+}
+
 func (s *Store) List() ([]Instance, error) {
 	rows, err := s.db.Query(`SELECT ` + instanceCols + ` FROM instances ORDER BY created_at`)
 	if err != nil {
