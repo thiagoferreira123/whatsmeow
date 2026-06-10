@@ -1,0 +1,12 @@
+# whatsmeow REST server runtime artifacts
+whatsmeow.db
+whatsmeow.db-shm
+whatsmeow.db-wal
+*.db
+*.db-shm
+*.db-wal
+
+# build output / local env
+restserver.exe
+restserver/.env
+restserver/*.png

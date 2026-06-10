@@ -1,0 +1,8 @@
+.git
+*.db
+*.db-shm
+*.db-wal
+restserver.exe
+restserver/*.png
+*.pem
+.env
