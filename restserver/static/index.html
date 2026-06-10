@@ -80,10 +80,7 @@
   <h1>whatsmeow <span class="muted">painel</span></h1>
   <span id="health" class="dot" title="servidor"></span>
   <div class="spacer"></div>
-  <div class="key">
-    <label style="margin:0">Senha</label>
-    <input id="apiKey" type="password" placeholder="senha do painel" />
-  </div>
+  <button class="ghost sm" id="btnLogout" style="display:none">Sair</button>
 </header>
 
 <main>
@@ -164,6 +161,18 @@
   </div>
 </div>
 
+<!-- Login gate -->
+<div class="overlay show" id="loginOverlay" style="background:var(--bg)">
+  <div class="modal" style="max-width:340px">
+    <div class="logo" style="margin:0 auto 10px;width:40px;height:40px;font-size:22px">🟢</div>
+    <h3>whatsmeow <span class="muted">painel</span></h3>
+    <div class="muted" style="margin-bottom:16px">Digite a senha para entrar</div>
+    <input id="loginPass" type="password" placeholder="senha" style="text-align:center" autofocus />
+    <button id="btnLogin" style="width:100%;margin-top:14px">Entrar</button>
+    <div id="loginErr" style="color:var(--danger);font-size:13px;margin-top:10px;min-height:16px"></div>
+  </div>
+</div>
+
 <div id="toasts"></div>
 
 <script>
@@ -172,13 +181,11 @@ const api = (m,p,b) => fetch(p,{method:m,headers:headers(b),body:b?JSON.stringif
   .then(async r=>{ const t=await r.text(); let j; try{j=t?JSON.parse(t):null}catch{j=t}
     if(!r.ok) throw new Error((j&&j.error)||r.status); return j; });
 function headers(b){ const h={}; if(b) h['Content-Type']='application/json';
-  const k=$('#apiKey').value.trim(); if(k) h['Authorization']='Bearer '+k; return h; }
+  const k=window.__key||''; if(k) h['Authorization']='Bearer '+k; return h; }
 function toast(msg,err){ const d=document.createElement('div'); d.className='toast'+(err?' err':'');
   d.textContent=msg; $('#toasts').appendChild(d); setTimeout(()=>d.remove(),3500); }
 
-// persist api key
-$('#apiKey').value = localStorage.getItem('wmKey')||'';
-$('#apiKey').addEventListener('change',()=>localStorage.setItem('wmKey',$('#apiKey').value.trim()));
+window.__key = '';
 
 const badge = s => `<span class="badge ${s}"><span class="b-dot"></span>${s}</span>`;
 const short = id => id ? id.slice(0,8) : '';
@@ -288,7 +295,7 @@ $('#btnSend').onclick = async ()=>{
       fd.append('text', $('#mediaCaption').value.trim());
       fd.append('fileName', f.name);
       fd.append('file', f, f.name);
-      const h={}; const k=$('#apiKey').value.trim(); if(k) h['Authorization']='Bearer '+k;
+      const h={}; const k=window.__key||''; if(k) h['Authorization']='Bearer '+k;
       const r = await fetch(`/instances/${sendId}/send/media`,{method:'POST',headers:h,body:fd});
       const t = await r.text(); if(!r.ok){ let j; try{j=JSON.parse(t)}catch{}; throw new Error((j&&j.error)||t||r.status); }
     }else{ const text=$('#sendText').value.trim(); if(!text){toast('Escreva a mensagem',true);return;}
@@ -303,7 +310,7 @@ $('#btnSend').onclick = async ()=>{
 function show(id){ $('#'+id).classList.add('show'); }
 function close(id){ $('#'+id).classList.remove('show'); if(id==='qrModal') stopQR(); }
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(b.dataset.close));
-document.querySelectorAll('.overlay').forEach(o=>o.addEventListener('click',e=>{ if(e.target===o) close(o.id); }));
+document.querySelectorAll('.overlay').forEach(o=>o.addEventListener('click',e=>{ if(e.target===o && o.id!=='loginOverlay') close(o.id); }));
 
 // ---- Global webhook (Cloud API) ----
 async function loadWebhook(){
@@ -321,8 +328,32 @@ $('#btnSaveWebhook').onclick = async ()=>{
   }catch(e){ s.textContent=''; toast('Erro: '+e.message,true); }
 };
 
-// boot
-load(); loadWebhook(); setInterval(load, 5000);
+// ---- Login gate ----
+const LSKEY='wmKey';
+async function checkAuth(key){
+  try{ const r=await fetch('/instances',{headers: key?{'Authorization':'Bearer '+key}:{}}); return r.status!==401; }
+  catch(e){ return false; }
+}
+let appStarted=false;
+function startApp(){ if(appStarted) return; appStarted=true;
+  $('#loginOverlay').classList.remove('show'); $('#btnLogout').style.display='';
+  load(); loadWebhook(); setInterval(load,5000);
+}
+async function doLogin(key){
+  if(await checkAuth(key)){ window.__key=key; localStorage.setItem(LSKEY,key); startApp(); return true; }
+  return false;
+}
+$('#btnLogin').onclick=async()=>{ $('#loginErr').textContent=''; const k=$('#loginPass').value;
+  if(!await doLogin(k)){ $('#loginErr').textContent='Senha incorreta'; $('#loginPass').value=''; $('#loginPass').focus(); } };
+$('#loginPass').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#btnLogin').click(); });
+$('#btnLogout').onclick=()=>{ localStorage.removeItem(LSKEY); window.__key=''; location.reload(); };
+
+// boot: try stored password, otherwise show the login gate
+(async()=>{
+  const stored=localStorage.getItem(LSKEY)||'';
+  if(await checkAuth(stored)){ window.__key=stored; startApp(); }
+  else { $('#loginOverlay').classList.add('show'); $('#loginPass').focus(); }
+})();
 </script>
 </body>
 </html>
