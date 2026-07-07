@@ -15,19 +15,23 @@ import (
 // the web app already expects from uazapi (header x-uazapi-secret), with simple
 // retry and messageid-based de-duplication.
 type WebhookSender struct {
-	client *http.Client
-	mu     sync.Mutex
-	seen   map[string]time.Time
+	client    *http.Client
+	mu        sync.Mutex
+	seen      map[string]time.Time
+	lastSweep time.Time
 }
 
 func NewWebhookSender() *WebhookSender {
 	return &WebhookSender{
-		client: &http.Client{Timeout: 15 * time.Second},
-		seen:   make(map[string]time.Time),
+		client:    &http.Client{Timeout: 15 * time.Second},
+		seen:      make(map[string]time.Time),
+		lastSweep: time.Now(),
 	}
 }
 
-// dedup reports whether id is new (not seen in the last 2h). Empty id is always new.
+// dedup reports whether id is new (not seen in the last 2h). Empty id is always
+// new. Expired entries are swept at most every 10 minutes — sweeping on every
+// message would make high-volume traffic quadratic over the 2h window.
 func (ws *WebhookSender) dedup(id string) bool {
 	if id == "" {
 		return true
@@ -35,10 +39,13 @@ func (ws *WebhookSender) dedup(id string) bool {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 	now := time.Now()
-	for k, t := range ws.seen {
-		if now.Sub(t) > 2*time.Hour {
-			delete(ws.seen, k)
+	if now.Sub(ws.lastSweep) > 10*time.Minute {
+		for k, t := range ws.seen {
+			if now.Sub(t) > 2*time.Hour {
+				delete(ws.seen, k)
+			}
 		}
+		ws.lastSweep = now
 	}
 	if _, ok := ws.seen[id]; ok {
 		return false

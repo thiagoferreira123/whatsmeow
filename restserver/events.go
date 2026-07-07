@@ -54,6 +54,12 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 			m.onStreamReplaced(instanceID)
 		case *events.Disconnected:
 			m.onDisconnected(instanceID)
+		case *events.TemporaryBan:
+			m.onTemporaryBan(instanceID, v)
+		case *events.ClientOutdated:
+			m.onClientOutdated(instanceID)
+		case *events.ConnectFailure:
+			m.onConnectFailure(instanceID, v)
 		}
 	}
 }
@@ -72,13 +78,16 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 	}
 	intent := parseIntent(text)
 
-	// Built-in 1/2 appointment-confirmation auto-reply.
+	// Built-in 1/2 appointment-confirmation auto-reply. Sent in the background
+	// so a slow send never blocks this instance's event-handler queue.
 	if m.cfg.AutoReplyEnabled && intent != "" {
 		reply := m.cfg.AutoReplyConfirm
 		if intent == "2" {
 			reply = m.cfg.AutoReplyCancel
 		}
-		_, _ = rt.client.SendMessage(context.Background(), v.Info.Chat, &waE2E.Message{Conversation: proto.String(reply)})
+		go func(chat types.JID) {
+			_, _ = rt.client.SendMessage(context.Background(), chat, &waE2E.Message{Conversation: proto.String(reply)})
+		}(v.Info.Chat)
 	}
 
 	// Deliver to the SINGLE GLOBAL webhook (WhatsApp Cloud API format).
@@ -159,6 +168,7 @@ func (m *Manager) onConnected(instanceID string) {
 	rt.loggedOut = false
 	rt.paused = false
 	rt.nextConnectAt = time.Time{}
+	rt.connectFails = 0
 	if cli.Store != nil && cli.Store.ID != nil {
 		rt.meta.JID = cli.Store.ID.String()
 		rt.meta.Owner = cli.Store.ID.User
@@ -257,6 +267,67 @@ func (m *Manager) onStreamReplaced(instanceID string) {
 	if gw.Enabled && gw.URL != "" {
 		m.webhooks.deliverCloudAPI(gw.URL, gw.AppSecret, cloudAPIStatusPayload(in, "disconnected", in.LastDisconnectReason))
 	}
+}
+
+// onTemporaryBan fires when WhatsApp temp-banned the account (e.g. too many
+// messages). Retrying before the ban expires only makes it worse — back off
+// until it lifts and surface the reason on the instance.
+func (m *Manager) onTemporaryBan(instanceID string, v *events.TemporaryBan) {
+	rt := m.get(instanceID)
+	if rt == nil {
+		return
+	}
+	wait := v.Expire
+	if wait <= 0 {
+		wait = 30 * time.Minute
+	}
+	m.log.Warnf("instance %s: TEMPORARY BAN (%s) — backing off reconnect for %s", instanceID, v.String(), wait)
+	rt.mu.Lock()
+	rt.meta.Status = "disconnected"
+	rt.meta.LastDisconnectReason = "temp_banned: " + v.String()
+	rt.nextConnectAt = time.Now().Add(wait)
+	in := rt.meta
+	rt.mu.Unlock()
+	_ = m.store.Save(&in)
+	gw := m.GetGlobalWebhook()
+	if gw.Enabled && gw.URL != "" {
+		m.webhooks.deliverCloudAPI(gw.URL, gw.AppSecret, cloudAPIStatusPayload(in, "disconnected", in.LastDisconnectReason))
+	}
+}
+
+// onClientOutdated fires when WhatsApp rejects our protocol version (405).
+// Reconnecting won't help until the whatsmeow library is updated — retry
+// hourly just in case, and log loudly so ops knows to update/redeploy.
+func (m *Manager) onClientOutdated(instanceID string) {
+	rt := m.get(instanceID)
+	if rt == nil {
+		return
+	}
+	m.log.Errorf("instance %s: CLIENT OUTDATED (405) — update the whatsmeow library and redeploy. Retrying hourly.", instanceID)
+	rt.mu.Lock()
+	rt.meta.Status = "disconnected"
+	rt.meta.LastDisconnectReason = "client_outdated (405): atualizar a lib whatsmeow e redeployar"
+	rt.nextConnectAt = time.Now().Add(time.Hour)
+	in := rt.meta
+	rt.mu.Unlock()
+	_ = m.store.Save(&in)
+}
+
+// onConnectFailure records other server-side connect rejections so the panel
+// shows why an instance is down (whatsmeow does not auto-reconnect on these;
+// the watchdog keeps retrying with backoff).
+func (m *Manager) onConnectFailure(instanceID string, v *events.ConnectFailure) {
+	rt := m.get(instanceID)
+	if rt == nil {
+		return
+	}
+	m.log.Warnf("instance %s: connect failure %d: %s", instanceID, int(v.Reason), v.Message)
+	rt.mu.Lock()
+	rt.meta.Status = "disconnected"
+	rt.meta.LastDisconnectReason = fmt.Sprintf("connect_failure %d: %s", int(v.Reason), v.Message)
+	in := rt.meta
+	rt.mu.Unlock()
+	_ = m.store.Save(&in)
 }
 
 func (m *Manager) onDisconnected(instanceID string) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type instanceRuntime struct {
 	loggedOut     bool      // real unlink (needs a new QR) — watchdog skips it
 	paused        bool      // intentional disconnect — watchdog must NOT reconnect
 	nextConnectAt time.Time // watchdog backoff: don't attempt before this
+	connectFails  int       // consecutive failed watchdog attempts (exponential backoff)
 }
 
 func (rt *instanceRuntime) metaCopy() Instance {
@@ -49,21 +51,49 @@ type Manager struct {
 	webhooks  *WebhookSender
 	log       waLog.Logger
 
+	// connectSem bounds simultaneous Connect() attempts (boot + watchdog) so
+	// hundreds of instances don't storm WhatsApp/CPU/SQLite at the same time.
+	connectSem chan struct{}
+
+	jidMu    sync.Mutex
+	jidCache map[string]jidCacheEntry // instanceID|digits -> resolved JID (TTL)
+
 	gwMu sync.RWMutex
 	gw   GlobalWebhook // single global webhook (WhatsApp Cloud API style)
 }
 
 func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waLog.Logger) *Manager {
+	conc := cfg.ConnectConcurrency
+	if conc <= 0 {
+		conc = 8
+	}
 	m := &Manager{
-		runtimes:  make(map[string]*instanceRuntime),
-		container: container,
-		store:     store,
-		cfg:       cfg,
-		webhooks:  NewWebhookSender(),
-		log:       log,
+		runtimes:   make(map[string]*instanceRuntime),
+		container:  container,
+		store:      store,
+		cfg:        cfg,
+		webhooks:   NewWebhookSender(),
+		log:        log,
+		connectSem: make(chan struct{}, conc),
+		jidCache:   make(map[string]jidCacheEntry),
 	}
 	m.loadGlobalWebhook()
 	return m
+}
+
+// connectWithLimit runs cli.Connect() holding a slot of the global connect
+// semaphore. Call from a goroutine; blocking here only delays other connects.
+func (m *Manager) connectWithLimit(rt *instanceRuntime, cli *whatsmeow.Client, reason string) {
+	m.connectSem <- struct{}{}
+	defer func() { <-m.connectSem }()
+	if cli.IsConnected() {
+		return
+	}
+	if err := cli.Connect(); err != nil && !errors.Is(err, whatsmeow.ErrAlreadyConnected) {
+		m.log.Warnf("%s: connect %s failed: %v", reason, rt.meta.ID, err)
+	} else {
+		m.log.Infof("%s: connecting %s", reason, rt.meta.ID)
+	}
 }
 
 func (m *Manager) get(id string) *instanceRuntime {
@@ -99,6 +129,21 @@ func (m *Manager) StartWatchdog(interval time.Duration) {
 	}()
 }
 
+// reconnectBackoff returns how long to wait before the next attempt after
+// `fails` consecutive failures: 30s, 1m, 2m, … capped at 10m, with ±20% jitter
+// so a fleet that went down together doesn't retry in lockstep.
+func reconnectBackoff(fails int) time.Duration {
+	base := 30 * time.Second
+	for i := 0; i < fails && base < 10*time.Minute; i++ {
+		base *= 2
+	}
+	if base > 10*time.Minute {
+		base = 10 * time.Minute
+	}
+	jitter := 0.8 + 0.4*rand.Float64()
+	return time.Duration(float64(base) * jitter)
+}
+
 func (m *Manager) reconnectStale() {
 	m.mu.RLock()
 	rts := make([]*instanceRuntime, 0, len(m.runtimes))
@@ -123,15 +168,10 @@ func (m *Manager) reconnectStale() {
 			continue
 		}
 		rt.mu.Lock()
-		rt.nextConnectAt = now.Add(30 * time.Second) // backoff between attempts
+		rt.nextConnectAt = now.Add(reconnectBackoff(rt.connectFails))
+		rt.connectFails++ // reset to 0 by onConnected
 		rt.mu.Unlock()
-		go func(rt *instanceRuntime, cli *whatsmeow.Client) {
-			if err := cli.Connect(); err != nil && !errors.Is(err, whatsmeow.ErrAlreadyConnected) {
-				m.log.Warnf("watchdog: reconnect %s failed: %v", rt.meta.ID, err)
-			} else {
-				m.log.Infof("watchdog: reconnecting %s", rt.meta.ID)
-			}
-		}(rt, cli)
+		go m.connectWithLimit(rt, cli, "watchdog")
 	}
 }
 
@@ -159,10 +199,37 @@ func (m *Manager) LoadAll(ctx context.Context) error {
 		m.mu.Unlock()
 
 		if device.ID != nil {
-			go func(rt *instanceRuntime) { _ = rt.client.Connect() }(rt)
+			go m.connectWithLimit(rt, rt.client, "boot")
 		}
 	}
 	return nil
+}
+
+// Shutdown cleanly disconnects every client (proper websocket close) so
+// sessions resume instantly on the next boot. Bounded by the caller's patience.
+func (m *Manager) Shutdown() {
+	m.mu.RLock()
+	rts := make([]*instanceRuntime, 0, len(m.runtimes))
+	for _, rt := range m.runtimes {
+		rts = append(rts, rt)
+	}
+	m.mu.RUnlock()
+
+	var wg sync.WaitGroup
+	for _, rt := range rts {
+		rt.mu.RLock()
+		cli := rt.client
+		rt.mu.RUnlock()
+		if cli == nil || !cli.IsConnected() {
+			continue
+		}
+		wg.Add(1)
+		go func(cli *whatsmeow.Client) {
+			defer wg.Done()
+			cli.Disconnect()
+		}(cli)
+	}
+	wg.Wait()
 }
 
 // Create registers a new instance (no pairing yet — call GetQR to pair).
@@ -415,8 +482,48 @@ func (m *Manager) SetWebhook(id, url, secret, events string, enabled bool) error
 	return m.store.Save(&in)
 }
 
+// jidCacheEntry is a resolved recipient JID with an expiry.
+type jidCacheEntry struct {
+	jid types.JID
+	exp time.Time
+}
+
+const (
+	jidCacheTTL     = 12 * time.Hour
+	jidCacheMaxSize = 50_000
+)
+
+func (m *Manager) cachedJID(key string) (types.JID, bool) {
+	m.jidMu.Lock()
+	defer m.jidMu.Unlock()
+	e, ok := m.jidCache[key]
+	if !ok || time.Now().After(e.exp) {
+		return types.JID{}, false
+	}
+	return e.jid, true
+}
+
+func (m *Manager) storeJID(key string, jid types.JID) {
+	m.jidMu.Lock()
+	defer m.jidMu.Unlock()
+	if len(m.jidCache) >= jidCacheMaxSize {
+		now := time.Now()
+		for k, e := range m.jidCache {
+			if now.After(e.exp) {
+				delete(m.jidCache, k)
+			}
+		}
+		if len(m.jidCache) >= jidCacheMaxSize { // still full of live entries: drop all (rare)
+			m.jidCache = make(map[string]jidCacheEntry)
+		}
+	}
+	m.jidCache[key] = jidCacheEntry{jid: jid, exp: time.Now().Add(jidCacheTTL)}
+}
+
 // resolveRecipient resolves a phone number to its canonical WhatsApp JID by
 // asking the server (IsOnWhatsApp), trying the Brazilian 9th-digit variants.
+// Successful lookups are cached per instance for jidCacheTTL so repeat sends
+// skip the network round-trip (and its rate-limit exposure).
 // A value already containing "@" is parsed as a JID and returned as-is.
 func (m *Manager) resolveRecipient(ctx context.Context, cli *whatsmeow.Client, number string) (types.JID, error) {
 	n := strings.TrimSpace(number)
@@ -434,6 +541,13 @@ func (m *Manager) resolveRecipient(ctx context.Context, cli *whatsmeow.Client, n
 	if digits == "" {
 		return types.JID{}, &apiError{Status: 400, Msg: "número inválido"}
 	}
+	cacheKey := digits
+	if cli.Store != nil && cli.Store.ID != nil {
+		cacheKey = cli.Store.ID.User + "|" + digits
+	}
+	if jid, ok := m.cachedJID(cacheKey); ok {
+		return jid, nil
+	}
 	candidates := phoneCandidates(digits)
 
 	resp, err := cli.IsOnWhatsApp(ctx, withPlus(candidates))
@@ -444,6 +558,7 @@ func (m *Manager) resolveRecipient(ctx context.Context, cli *whatsmeow.Client, n
 	}
 	for _, r := range resp {
 		if r.IsIn {
+			m.storeJID(cacheKey, r.JID)
 			return r.JID, nil
 		}
 	}

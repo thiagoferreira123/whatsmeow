@@ -15,8 +15,11 @@ RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data
 WORKDIR /app
 COPY --from=build /out/restserver /app/restserver
 # Sessões/keys do WhatsApp em /data (volume persistente — sobrevive a redeploys).
+# GOMEMLIMIT (soft cap do GC) segura o heap antes de um OOM-kill derrubar todas
+# as instâncias de uma vez — a EC2 é compartilhada com o prod (DietSystem/Pulso).
 ENV PORT=8080 \
-    WHATSMEOW_DSN="file:/data/whatsmeow.db?_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+    GOMEMLIMIT=1750MiB \
+    WHATSMEOW_DSN="file:/data/whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 EXPOSE 8080
 VOLUME ["/data"]
 ENTRYPOINT ["/app/restserver"]
