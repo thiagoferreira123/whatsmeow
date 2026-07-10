@@ -25,6 +25,12 @@ ENV PORT=8080 \
     SEND_RECIPIENT_DAILY_MAX=20 \
     SEND_SERVICE_WINDOW_HOURS=24 \
     SEND_REQUIRE_LOCAL_CONSENT=false \
+    GLOBAL_SEND_CONCURRENCY=8 \
+    QUEUE_WORKERS=4 \
+    QUEUE_POLL_MILLISECONDS=500 \
+    QUEUE_MAX_ATTEMPTS=5 \
+    QUEUE_RETRY_MAX_SECONDS=300 \
+    RESET_COOLDOWN_SECONDS=60 \
     WHATSMEOW_DSN="file:/data/whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 EXPOSE 8080
 VOLUME ["/data"]

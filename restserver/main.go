@@ -52,6 +52,7 @@ func main() {
 	if err := mgr.LoadAll(ctx); err != nil {
 		log.Printf("warning: failed to load existing instances: %v", err)
 	}
+	mgr.StartQueueWorkers()
 	mgr.StartWatchdog(time.Duration(cfg.WatchdogSeconds) * time.Second)
 
 	handlers := NewHandlers(mgr, cfg)
@@ -64,9 +65,9 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("whatsmeow REST server listening on :%s (auth=%v autoreply=%v watchdog=%ds connectConcurrency=%d sendRate=%d/min burst=%d consent=%v)",
+	log.Printf("whatsmeow REST server listening on :%s (auth=%v autoreply=%v watchdog=%ds connectConcurrency=%d sendConcurrency=%d queueWorkers=%d sendRate=%d/min burst=%d consent=%v)",
 		cfg.Port, cfg.AdminAPIKey != "", cfg.AutoReplyEnabled, cfg.WatchdogSeconds, cfg.ConnectConcurrency,
-		cfg.SendRatePerMinute, cfg.SendBurst, cfg.RequireLocalConsent)
+		cfg.GlobalSendConcurrency, cfg.QueueWorkers, cfg.SendRatePerMinute, cfg.SendBurst, cfg.RequireLocalConsent)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

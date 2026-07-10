@@ -16,10 +16,15 @@ func (h *Handlers) registerUazapiCompat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /instance/status", h.uzStatus)
 	mux.HandleFunc("GET /instance/all", h.uzAll)
 	mux.HandleFunc("POST /instance/disconnect", h.uzDisconnect)
+	mux.HandleFunc("POST /instance/hibernate", h.uzDisconnect)
+	mux.HandleFunc("POST /instance/resume", h.uzResume)
+	mux.HandleFunc("POST /instance/reset", h.uzReset)
 	mux.HandleFunc("DELETE /instance", h.uzDelete)
 	mux.HandleFunc("POST /webhook", h.uzSetWebhook)
 	mux.HandleFunc("POST /send/text", h.uzSendText)
 	mux.HandleFunc("POST /send/media", h.uzSendMedia)
+	mux.HandleFunc("GET /message/async", h.uzAsyncQueue)
+	mux.HandleFunc("DELETE /message/async", h.uzClearAsyncQueue)
 }
 
 // isUazapiCompatPath: these endpoints do their own admintoken/token auth, so they
@@ -28,7 +33,7 @@ func isUazapiCompatPath(p string) bool {
 	if p == "/instance" || p == "/webhook" {
 		return true
 	}
-	return strings.HasPrefix(p, "/instance/") || strings.HasPrefix(p, "/send/")
+	return strings.HasPrefix(p, "/instance/") || strings.HasPrefix(p, "/send/") || strings.HasPrefix(p, "/message/")
 }
 
 func (h *Handlers) uzAdminOK(r *http.Request) bool {
@@ -55,26 +60,37 @@ func (h *Handlers) uzByToken(w http.ResponseWriter, r *http.Request) (Instance, 
 // uzInstanceObj renders an Instance in uazapi shape (live status merged).
 func (h *Handlers) uzInstanceObj(in Instance) map[string]any {
 	status := in.Status
+	var detail map[string]any
 	if sd, err := h.mgr.StatusDetail(in.ID); err == nil {
+		detail = sd
 		if s, ok := sd["status"].(string); ok {
 			status = s
 		}
 	}
-	return map[string]any{
-		"id":            in.ID,
-		"token":         in.Token,
-		"name":          in.Name,
-		"status":        status,
-		"adminField01":  in.AdminField01,
-		"profileName":   in.ProfileName,
-		"profilePicUrl": in.ProfilePicUrl,
-		"isBusiness":    in.IsBusiness,
-		"owner":         in.Owner,
-		"created":       in.CreatedAt,
-		"updated":       in.UpdatedAt,
-		"qrcode":        "",
-		"paircode":      "",
+	obj := map[string]any{
+		"id":             in.ID,
+		"token":          in.Token,
+		"name":           in.Name,
+		"status":         status,
+		"adminField01":   in.AdminField01,
+		"profileName":    in.ProfileName,
+		"profilePicUrl":  in.ProfilePicUrl,
+		"isBusiness":     in.IsBusiness,
+		"owner":          in.Owner,
+		"created":        in.CreatedAt,
+		"updated":        in.UpdatedAt,
+		"qrcode":         "",
+		"paircode":       "",
+		"lastDisconnect": in.LastDisconnectReason,
 	}
+	for _, key := range []string{"connected", "loggedIn", "hibernated", "conflicted", "resetting", "lastResetAt", "sendingBlockedUntil", "queue"} {
+		if detail != nil {
+			if value, ok := detail[key]; ok {
+				obj[key] = value
+			}
+		}
+	}
+	return obj
 }
 
 // uzInstanceWithQR adds the current QR (data URI) + status, starting pairing if needed.
@@ -128,7 +144,7 @@ func (h *Handlers) uzStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"instance": h.uzInstanceWithQR(in)})
+	writeJSON(w, http.StatusOK, map[string]any{"instance": h.uzInstanceObj(in)})
 }
 
 func (h *Handlers) uzAll(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +171,30 @@ func (h *Handlers) uzDisconnect(w http.ResponseWriter, r *http.Request) {
 	if handleErr(w, h.mgr.Disconnect(in.ID)) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "disconnected"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "hibernated"})
+}
+
+func (h *Handlers) uzResume(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	if handleErr(w, h.mgr.Resume(in.ID)) {
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "connecting"})
+}
+
+func (h *Handlers) uzReset(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.mgr.ResetRuntime(in.ID)
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
 }
 
 func (h *Handlers) uzDelete(w http.ResponseWriter, r *http.Request) {
@@ -198,10 +237,24 @@ func (h *Handlers) uzSendText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Number string `json:"number"`
-		Text   string `json:"text"`
+		Number         string `json:"number"`
+		Text           string `json:"text"`
+		Async          bool   `json:"async"`
+		IdempotencyKey string `json:"idempotencyKey"`
 	}
 	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.Async {
+		key := body.IdempotencyKey
+		if key == "" {
+			key = r.Header.Get("Idempotency-Key")
+		}
+		job, created, err := h.mgr.EnqueueText(in.ID, body.Number, body.Text, key)
+		if handleErr(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
 	id, err := h.mgr.SendText(r.Context(), in.ID, body.Number, body.Text)
@@ -217,13 +270,29 @@ func (h *Handlers) uzSendMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Number  string `json:"number"`
-		Type    string `json:"type"`
-		File    string `json:"file"`
-		Text    string `json:"text"`
-		DocName string `json:"docName"`
+		Number         string `json:"number"`
+		Type           string `json:"type"`
+		File           string `json:"file"`
+		Text           string `json:"text"`
+		DocName        string `json:"docName"`
+		Async          bool   `json:"async"`
+		IdempotencyKey string `json:"idempotencyKey"`
 	}
 	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.Async {
+		key := body.IdempotencyKey
+		if key == "" {
+			key = r.Header.Get("Idempotency-Key")
+		}
+		job, created, err := h.mgr.EnqueueMedia(in.ID, queuedMediaPayload{
+			Number: body.Number, Type: body.Type, File: body.File, Text: body.Text, FileName: body.DocName,
+		}, key)
+		if handleErr(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
 	id, err := h.mgr.SendMedia(r.Context(), in.ID, body.Number, body.Type, body.File, body.Text, body.DocName)
@@ -231,4 +300,53 @@ func (h *Handlers) uzSendMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "sent"})
+}
+
+func (h *Handlers) uzAsyncQueue(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	summary, err := h.mgr.store.QueueSummary(in.ID)
+	if handleErr(w, err) {
+		return
+	}
+	rt := h.mgr.get(in.ID)
+	sessionReady := false
+	resetting := false
+	if rt != nil {
+		rt.mu.RLock()
+		cli := rt.client
+		sessionReady = cli != nil && cli.IsConnected() && cli.IsLoggedIn()
+		resetting = rt.resetting
+		rt.mu.RUnlock()
+	}
+	status := "idle"
+	if pending, _ := summary["pending"].(int64); pending > 0 {
+		if sessionReady {
+			status = "queued"
+		} else {
+			status = "waiting_connection"
+		}
+	}
+	processingNow := false
+	if counts, ok := summary["counts"].(map[string]int64); ok {
+		processingNow = counts[queueProcessing] > 0
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": status, "pending": summary["pending"], "sessionReady": sessionReady,
+		"processingNow": processingNow, "acceptingNewMessages": true, "resetting": resetting,
+	})
+}
+
+func (h *Handlers) uzClearAsyncQueue(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	canceled, err := h.mgr.store.CancelQueue(in.ID)
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"canceled": canceled})
 }

@@ -33,6 +33,7 @@ type Instance struct {
 	UpdatedAt            string `json:"updatedAt"`
 	LastDisconnectReason string `json:"lastDisconnectReason,omitempty"`
 	SendingBlockedUntil  string `json:"sendingBlockedUntil,omitempty"`
+	LastResetAt          string `json:"lastResetAt,omitempty"`
 }
 
 const schemaSQL = `
@@ -54,7 +55,8 @@ CREATE TABLE IF NOT EXISTS instances (
 	created_at             TEXT NOT NULL,
 	updated_at             TEXT NOT NULL,
 	last_disconnect_reason TEXT NOT NULL DEFAULT '',
-	sending_blocked_until  TEXT NOT NULL DEFAULT ''
+	sending_blocked_until  TEXT NOT NULL DEFAULT '',
+	last_reset_at          TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS recipient_permissions (
@@ -81,6 +83,29 @@ CREATE INDEX IF NOT EXISTS outbound_activity_recipient_time
 	ON outbound_activity(instance_id, recipient, sent_at);
 CREATE INDEX IF NOT EXISTS outbound_activity_time ON outbound_activity(sent_at);`
 
+const queueSchemaSQL = `
+CREATE TABLE IF NOT EXISTS outbound_queue (
+	id              TEXT PRIMARY KEY,
+	instance_id     TEXT NOT NULL,
+	idempotency_key TEXT NOT NULL,
+	kind            TEXT NOT NULL,
+	payload_json    TEXT NOT NULL,
+	status          TEXT NOT NULL DEFAULT 'queued',
+	attempts        INTEGER NOT NULL DEFAULT 0,
+	max_attempts    INTEGER NOT NULL DEFAULT 5,
+	available_at    TEXT NOT NULL,
+	created_at      TEXT NOT NULL,
+	updated_at      TEXT NOT NULL,
+	message_id      TEXT NOT NULL DEFAULT '',
+	last_error      TEXT NOT NULL DEFAULT '',
+	FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE,
+	UNIQUE(instance_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS outbound_queue_ready
+	ON outbound_queue(status, available_at, created_at);
+CREATE INDEX IF NOT EXISTS outbound_queue_instance
+	ON outbound_queue(instance_id, status, created_at);`
+
 // Store is a thin CRUD layer over the instances table. It shares the same
 // *sql.DB as whatsmeow's sqlstore container (same SQLite file).
 type Store struct {
@@ -92,11 +117,15 @@ func NewStore(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return nil, err
 	}
+	if _, err := db.Exec(queueSchemaSQL); err != nil {
+		return nil, err
+	}
 	// Add columns to pre-existing tables (errors on duplicate column are ignored).
 	for _, alter := range []string{
 		`ALTER TABLE instances ADD COLUMN profile_pic_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE instances ADD COLUMN is_business INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE instances ADD COLUMN sending_blocked_until TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE instances ADD COLUMN last_reset_at TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(alter)
 	}
@@ -104,6 +133,12 @@ func NewStore(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
+	// A process may stop after claiming a job. Make those jobs eligible again;
+	// idempotency keys prevent clients from creating duplicates while recovering.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, _ = db.Exec(`UPDATE outbound_queue SET status='queued', available_at=?, updated_at=?, last_error='recovered after process restart' WHERE status='processing'`, now, now)
+	cutoff := time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	_, _ = db.Exec(`DELETE FROM outbound_queue WHERE status IN ('sent','failed','canceled') AND updated_at<?`, cutoff)
 	return &Store{db: db}, nil
 }
 
@@ -123,7 +158,7 @@ func (s *Store) SetSetting(key, val string) error {
 	return err
 }
 
-const instanceCols = `id,name,jid,token,admin_field01,webhook_url,webhook_secret,webhook_events,webhook_enabled,status,profile_name,profile_pic_url,is_business,owner,created_at,updated_at,last_disconnect_reason,sending_blocked_until`
+const instanceCols = `id,name,jid,token,admin_field01,webhook_url,webhook_secret,webhook_events,webhook_enabled,status,profile_name,profile_pic_url,is_business,owner,created_at,updated_at,last_disconnect_reason,sending_blocked_until,last_reset_at`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -134,7 +169,7 @@ func scanInstance(s rowScanner) (Instance, error) {
 		&in.ID, &in.Name, &in.JID, &in.Token, &in.AdminField01,
 		&in.WebhookURL, &in.WebhookSecret, &in.WebhookEvents, &enabled,
 		&in.Status, &in.ProfileName, &in.ProfilePicUrl, &business, &in.Owner,
-		&in.CreatedAt, &in.UpdatedAt, &in.LastDisconnectReason, &in.SendingBlockedUntil,
+		&in.CreatedAt, &in.UpdatedAt, &in.LastDisconnectReason, &in.SendingBlockedUntil, &in.LastResetAt,
 	)
 	in.WebhookEnabled = enabled != 0
 	in.IsBusiness = business != 0
@@ -143,11 +178,11 @@ func scanInstance(s rowScanner) (Instance, error) {
 
 func (s *Store) Create(in *Instance) error {
 	_, err := s.db.Exec(
-		`INSERT INTO instances (`+instanceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO instances (`+instanceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		in.ID, in.Name, in.JID, in.Token, in.AdminField01,
 		in.WebhookURL, in.WebhookSecret, in.WebhookEvents, b2i(in.WebhookEnabled),
 		in.Status, in.ProfileName, in.ProfilePicUrl, b2i(in.IsBusiness), in.Owner,
-		in.CreatedAt, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil,
+		in.CreatedAt, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.LastResetAt,
 	)
 	return err
 }
@@ -156,10 +191,10 @@ func (s *Store) Create(in *Instance) error {
 func (s *Store) Save(in *Instance) error {
 	in.UpdatedAt = nowRFC()
 	_, err := s.db.Exec(
-		`UPDATE instances SET name=?,jid=?,token=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_enabled=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=?,sending_blocked_until=? WHERE id=?`,
+		`UPDATE instances SET name=?,jid=?,token=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_enabled=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=?,sending_blocked_until=?,last_reset_at=? WHERE id=?`,
 		in.Name, in.JID, in.Token, in.AdminField01, in.WebhookURL, in.WebhookSecret,
 		in.WebhookEvents, b2i(in.WebhookEnabled), in.Status, in.ProfileName, in.ProfilePicUrl,
-		b2i(in.IsBusiness), in.Owner, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.ID,
+		b2i(in.IsBusiness), in.Owner, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.LastResetAt, in.ID,
 	)
 	return err
 }

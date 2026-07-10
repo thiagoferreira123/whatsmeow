@@ -17,6 +17,13 @@ sessões e chaves do WhatsApp a terceiros.
 - `429 Retry-After` para o chamador enfileirar e tentar novamente no momento correto;
 - circuit breaker persistente após `TemporaryBan`, inclusive através de reinícios;
 - auto-respostas submetidas à mesma política dos demais envios.
+- fila SQLite persistente com idempotência, retries e estado `waiting_connection`;
+- apenas um job em processamento por instância e concorrência global limitada;
+- reset controlado com cooldown e recuperação de backlog;
+- hibernação/retomada sem apagar credenciais;
+- cancelamento do contexto de QR para evitar goroutines antigas derrubando conexões novas;
+- pausa automática após `stream_replaced`, exigindo `resume`/`reset` depois de fechar a sessão concorrente;
+- métricas Prometheus de conexão, envios, fila e resets.
 
 O chamado "consentimento local" não vem do WhatsApp. O protocolo Web usado por
 `whatsmeow` não expõe estado de opt-in, quality rating, templates aprovados ou limites
@@ -42,6 +49,12 @@ SEND_RECIPIENT_COOLDOWN_SECONDS=10
 SEND_RECIPIENT_DAILY_MAX=20
 SEND_SERVICE_WINDOW_HOURS=24
 SEND_REQUIRE_LOCAL_CONSENT=false
+GLOBAL_SEND_CONCURRENCY=8
+QUEUE_WORKERS=4
+QUEUE_POLL_MILLISECONDS=500
+QUEUE_MAX_ATTEMPTS=5
+QUEUE_RETRY_MAX_SECONDS=300
+RESET_COOLDOWN_SECONDS=60
 ```
 
 Rollout recomendado:

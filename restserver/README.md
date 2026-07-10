@@ -40,12 +40,19 @@ diretório de execução).
 | `SEND_RECIPIENT_DAILY_MAX` | `20` | teto móvel de 24h por instância/destinatário (`0` desliga) |
 | `SEND_REQUIRE_LOCAL_CONSENT` | `false` | exige registro local de consentimento ou mensagem recebida dentro da janela de atendimento |
 | `SEND_SERVICE_WINDOW_HOURS` | `24` | duração da janela aberta por uma mensagem recebida |
+| `GLOBAL_SEND_CONCURRENCY` | `8` | máximo de uploads/envios simultâneos em todo o processo |
+| `QUEUE_WORKERS` | `4` | workers da fila persistente (`0` desliga o processamento) |
+| `QUEUE_POLL_MILLISECONDS` | `500` | intervalo de polling quando a fila está vazia |
+| `QUEUE_MAX_ATTEMPTS` | `5` | tentativas máximas para falhas transitórias |
+| `QUEUE_RETRY_MAX_SECONDS` | `300` | teto do backoff exponencial da fila |
+| `RESET_COOLDOWN_SECONDS` | `60` | intervalo mínimo entre resets controlados da mesma instância |
 
 ## Endpoints
 
 | Método/Path | Body | Resposta |
 |---|---|---|
 | `GET /health` | — | health/version/capacidades (sem auth) |
+| `GET /metrics` | — | métricas Prometheus (com auth administrativa) |
 | `POST /instances` | `{name, adminField01?, webhookUrl?, webhookSecret?}` | instância criada (com `id`, `token`) |
 | `GET /instances` | — | `[instância]` |
 | `GET /instances/{id}` | — | instância |
@@ -53,15 +60,20 @@ diretório de execução).
 | `GET /instances/{id}/qr` | — | `{status, qrcode:"data:image/png;base64,…", code, expiresAt}` |
 | `GET /instances/{id}/qr.png` | — | imagem PNG do QR (abrir no navegador p/ escanear) |
 | `GET /instances/{id}/status` | — | `{status, loggedIn, connected, owner, profileName, sendingBlockedUntil}` |
-| `POST /instances/{id}/send/text` | `{number, text}` | `{id, status}` |
-| `POST /instances/{id}/send/media` | **JSON:** `{number, type?, file:URL\|base64\|dataURI, text?, fileName?}` · **ou upload:** `multipart/form-data` com campo `file` (+ `number`, `type?`, `text?`, `fileName?`) | `{id, status}` |
+| `POST /instances/{id}/send/text` | `{number, text, async?, idempotencyKey?}` | síncrono `200` ou enfileirado `202` |
+| `POST /instances/{id}/send/media` | **JSON:** `{number, type?, file:URL\|base64\|dataURI, text?, fileName?, async?, idempotencyKey?}` · **ou upload:** `multipart/form-data` | síncrono `200` ou JSON enfileirado `202` |
+| `GET /instances/{id}/queue` | query `status?`, `limit?` | resumo, jobs e prontidão da sessão |
+| `DELETE /instances/{id}/queue` | — | cancela jobs ainda pendentes |
+| `POST /instances/{id}/reset` | — | reset controlado do runtime sem apagar credenciais |
+| `POST /instances/{id}/hibernate` | — | pausa socket e preserva credenciais/fila |
+| `POST /instances/{id}/resume` | — | retoma sessão hibernada ou em conflito |
 | `GET /instances/{id}/consents/{number}` | — | registro local atual do destinatário |
 | `POST /instances/{id}/consents` | `{number, source}` | registra localmente o consentimento e sua origem auditável |
 | `POST /instances/{id}/consents/revoke` | `{number, source?}` | revoga e bloqueia novos envios |
 | `POST /instances/{id}/webhook` | `{url, secret?, events?, enabled?}` | `{ok:true}` |
-| `POST /instances/{id}/disconnect` | — | `204` (fecha socket, mantém sessão) |
+| `POST /instances/{id}/disconnect` | — | alias legado de hibernação (`204`) |
 
-`status` ∈ `disconnected | connecting | connected`. `number` aceita telefone (`5511999998888`,
+`status` ∈ `disconnected | connecting | connected | hibernated`. `number` aceita telefone (`5511999998888`,
 com ou sem formatação) ou JID completo (`...@s.whatsapp.net`). O número é **resolvido via
 `IsOnWhatsApp`** (o servidor do WhatsApp devolve o JID canônico), tratando a regra do **9º dígito**
 brasileiro automaticamente — testa as variantes com/sem o `9`. Número não registrado → `422`.
@@ -76,6 +88,18 @@ Veja [OUTBOUND_SAFETY.md](OUTBOUND_SAFETY.md) para o rollout no Coolify.
 > O registro de consentimento é interno deste serviço. `whatsmeow` não oferece uma API
 > para consultar uma autorização reconhecida pelo WhatsApp/Meta. Por isso o enforcement
 > local é opcional e vem desligado por padrão.
+
+### Fila persistente e recuperação
+
+Envie `async:true` no JSON (ou `?async=true`) para receber `202` imediatamente. A
+mensagem fica no SQLite e passa por apenas um worker por instância. Se o WhatsApp cair,
+o job muda para `waiting_connection` sem consumir tentativa; quando a sessão volta, o
+envio continua. Falhas transitórias usam backoff exponencial, erros permanentes viram
+`failed`, e jobs `processing` voltam para `queued` após restart do container.
+
+Use `Idempotency-Key` ou `idempotencyKey` para que retries HTTP devolvam o mesmo job em
+vez de duplicar a mensagem. Upload multipart continua exclusivamente síncrono; para
+fila de mídia, use JSON com URL/base64/data URI.
 
 ## Teste rápido (PowerShell)
 

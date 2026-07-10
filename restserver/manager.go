@@ -29,8 +29,11 @@ type instanceRuntime struct {
 	qrCode        string
 	qrExpiresAt   time.Time
 	qrRunning     bool
+	qrCancel      context.CancelFunc
 	loggedOut     bool      // real unlink (needs a new QR) — watchdog skips it
 	paused        bool      // intentional disconnect — watchdog must NOT reconnect
+	conflicted    bool      // another live client replaced this session
+	resetting     bool      // controlled runtime reset in progress
 	nextConnectAt time.Time // watchdog backoff: don't attempt before this
 	connectFails  int       // consecutive failed watchdog attempts (exponential backoff)
 }
@@ -54,7 +57,11 @@ type Manager struct {
 
 	// connectSem bounds simultaneous Connect() attempts (boot + watchdog) so
 	// hundreds of instances don't storm WhatsApp/CPU/SQLite at the same time.
-	connectSem chan struct{}
+	connectSem  chan struct{}
+	sendSem     chan struct{}
+	queueCancel context.CancelFunc
+	queueWG     sync.WaitGroup
+	stats       managerStats
 
 	jidMu    sync.Mutex
 	jidCache map[string]jidCacheEntry // instanceID|digits -> resolved JID (TTL)
@@ -68,6 +75,10 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 	if conc <= 0 {
 		conc = 8
 	}
+	sendConc := cfg.GlobalSendConcurrency
+	if sendConc <= 0 {
+		sendConc = 8
+	}
 	m := &Manager{
 		runtimes:   make(map[string]*instanceRuntime),
 		container:  container,
@@ -77,6 +88,7 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 		outbound:   newOutboundGuard(cfg),
 		log:        log,
 		connectSem: make(chan struct{}, conc),
+		sendSem:    make(chan struct{}, sendConc),
 		jidCache:   make(map[string]jidCacheEntry),
 	}
 	m.loadGlobalWebhook()
@@ -91,7 +103,12 @@ func (m *Manager) connectWithLimit(rt *instanceRuntime, cli *whatsmeow.Client, r
 	if cli.IsConnected() {
 		return
 	}
+	m.stats.connectAttempts.Add(1)
 	if err := cli.Connect(); err != nil && !errors.Is(err, whatsmeow.ErrAlreadyConnected) {
+		m.stats.connectFailures.Add(1)
+		rt.mu.Lock()
+		rt.resetting = false
+		rt.mu.Unlock()
 		m.log.Warnf("%s: connect %s failed: %v", reason, rt.meta.ID, err)
 	} else {
 		m.log.Infof("%s: connecting %s", reason, rt.meta.ID)
@@ -158,7 +175,7 @@ func (m *Manager) reconnectStale() {
 	for _, rt := range rts {
 		rt.mu.RLock()
 		cli := rt.client
-		skip := rt.loggedOut || rt.paused || rt.qrRunning || now.Before(rt.nextConnectAt)
+		skip := rt.loggedOut || rt.paused || rt.conflicted || rt.qrRunning || now.Before(rt.nextConnectAt)
 		rt.mu.RUnlock()
 		if cli == nil || skip {
 			continue
@@ -184,7 +201,11 @@ func (m *Manager) LoadAll(ctx context.Context) error {
 		return err
 	}
 	for _, in := range list {
-		rt := &instanceRuntime{meta: in}
+		rt := &instanceRuntime{
+			meta:       in,
+			paused:     in.Status == "hibernated",
+			conflicted: strings.HasPrefix(in.LastDisconnectReason, "stream_replaced"),
+		}
 		var device *store.Device
 		if in.JID != "" {
 			if jid, perr := types.ParseJID(in.JID); perr == nil {
@@ -200,7 +221,7 @@ func (m *Manager) LoadAll(ctx context.Context) error {
 		m.runtimes[in.ID] = rt
 		m.mu.Unlock()
 
-		if device.ID != nil {
+		if device.ID != nil && !rt.paused && !rt.conflicted {
 			go m.connectWithLimit(rt, rt.client, "boot")
 		}
 	}
@@ -210,6 +231,9 @@ func (m *Manager) LoadAll(ctx context.Context) error {
 // Shutdown cleanly disconnects every client (proper websocket close) so
 // sessions resume instantly on the next boot. Bounded by the caller's patience.
 func (m *Manager) Shutdown() {
+	if m.queueCancel != nil {
+		m.queueCancel()
+	}
 	m.mu.RLock()
 	rts := make([]*instanceRuntime, 0, len(m.runtimes))
 	for _, rt := range m.runtimes {
@@ -232,6 +256,7 @@ func (m *Manager) Shutdown() {
 		}(cli)
 	}
 	wg.Wait()
+	m.queueWG.Wait()
 }
 
 // Create registers a new instance (no pairing yet — call GetQR to pair).
@@ -288,12 +313,16 @@ func (m *Manager) statusOf(rt *instanceRuntime) string {
 	cli := rt.client
 	qr := rt.qrCode
 	running := rt.qrRunning
+	paused := rt.paused
 	rt.mu.RUnlock()
 	if cli != nil && cli.IsConnected() && cli.IsLoggedIn() {
 		return "connected"
 	}
 	if running || qr != "" {
 		return "connecting"
+	}
+	if paused {
+		return "hibernated"
 	}
 	return "disconnected"
 }
@@ -305,13 +334,16 @@ func (m *Manager) StatusDetail(id string) (map[string]any, error) {
 		return nil, errNotFound
 	}
 	in := rt.metaCopy()
+	rt.mu.RLock()
 	cli := rt.client
+	paused, conflicted, resetting := rt.paused, rt.conflicted, rt.resetting
+	rt.mu.RUnlock()
 	loggedIn := cli != nil && cli.IsLoggedIn()
 	owner := in.Owner
 	if cli != nil && cli.Store != nil && cli.Store.ID != nil {
 		owner = cli.Store.ID.User
 	}
-	return map[string]any{
+	result := map[string]any{
 		"id":                  id,
 		"status":              m.statusOf(rt),
 		"loggedIn":            loggedIn,
@@ -321,7 +353,15 @@ func (m *Manager) StatusDetail(id string) (map[string]any, error) {
 		"profilePicUrl":       in.ProfilePicUrl,
 		"isBusiness":          in.IsBusiness,
 		"sendingBlockedUntil": in.SendingBlockedUntil,
-	}, nil
+		"lastResetAt":         in.LastResetAt,
+		"hibernated":          paused,
+		"conflicted":          conflicted,
+		"resetting":           resetting,
+	}
+	if queue, err := m.store.QueueSummary(id); err == nil {
+		result["queue"] = queue
+	}
+	return result, nil
 }
 
 // QR returns the current QR (as a PNG data URI) and raw code, starting the
@@ -369,6 +409,7 @@ func (m *Manager) qrCode(id string) (code string, expires time.Time, status stri
 	if cli.Store.ID != nil {
 		rt.mu.Lock()
 		rt.paused = false // user asked to bring it back — re-enable the watchdog
+		rt.conflicted = false
 		rt.nextConnectAt = time.Time{}
 		rt.mu.Unlock()
 		if !cli.IsConnected() {
@@ -379,17 +420,21 @@ func (m *Manager) qrCode(id string) (code string, expires time.Time, status stri
 
 	rt.mu.Lock()
 	if !rt.qrRunning {
-		qrChan, qerr := cli.GetQRChannel(context.Background())
+		qrCtx, cancel := context.WithCancel(context.Background())
+		qrChan, qerr := cli.GetQRChannel(qrCtx)
 		if qerr != nil {
+			cancel()
 			rt.mu.Unlock()
 			go func() { _ = cli.Connect() }()
 			return "", time.Time{}, "connecting", nil
 		}
 		if cerr := cli.Connect(); cerr != nil {
+			cancel()
 			rt.mu.Unlock()
 			return "", time.Time{}, "", cerr
 		}
 		rt.qrRunning = true
+		rt.qrCancel = cancel
 		go m.consumeQR(rt, qrChan)
 	}
 	rt.mu.Unlock()
@@ -424,6 +469,7 @@ func (m *Manager) consumeQR(rt *instanceRuntime, ch <-chan whatsmeow.QRChannelIt
 	rt.mu.Lock()
 	rt.qrRunning = false
 	rt.qrCode = ""
+	rt.qrCancel = nil
 	rt.mu.Unlock()
 }
 
@@ -433,13 +479,103 @@ func (m *Manager) Disconnect(id string) error {
 	if rt == nil {
 		return errNotFound
 	}
-	rt.client.Disconnect()
 	rt.mu.Lock()
-	rt.meta.Status = "disconnected"
+	if rt.qrCancel != nil {
+		rt.qrCancel()
+		rt.qrCancel = nil
+	}
+	rt.meta.Status = "hibernated"
 	rt.paused = true // intentional — the watchdog must leave it down
 	in := rt.meta
 	rt.mu.Unlock()
+	rt.client.Disconnect()
 	return m.store.Save(&in)
+}
+
+// Resume brings back a hibernated or conflict-paused session without a new QR.
+func (m *Manager) Resume(id string) error {
+	rt := m.get(id)
+	if rt == nil {
+		return errNotFound
+	}
+	cli := rt.client
+	if cli == nil || cli.Store == nil || cli.Store.ID == nil {
+		return &apiError{Status: 409, Msg: "instance has no persisted session; pair with QR first"}
+	}
+	rt.mu.Lock()
+	rt.paused = false
+	rt.conflicted = false
+	rt.meta.Status = "connecting"
+	rt.meta.LastDisconnectReason = ""
+	rt.nextConnectAt = time.Time{}
+	in := rt.meta
+	rt.mu.Unlock()
+	if err := m.store.Save(&in); err != nil {
+		return err
+	}
+	go m.connectWithLimit(rt, cli, "resume")
+	return nil
+}
+
+// ResetRuntime performs a controlled socket restart without deleting session
+// credentials. It is cooldown-protected and also recovers stuck queue jobs.
+func (m *Manager) ResetRuntime(id string) (map[string]any, error) {
+	rt := m.get(id)
+	if rt == nil {
+		return nil, errNotFound
+	}
+	cli := rt.client
+	rt.mu.RLock()
+	loggedOut := rt.loggedOut
+	rt.mu.RUnlock()
+	if cli == nil || cli.Store == nil || cli.Store.ID == nil || loggedOut {
+		return nil, &apiError{Status: 409, Msg: "session is not recoverable; a new QR is required"}
+	}
+	now := time.Now()
+	rt.mu.Lock()
+	lastReset := parseStoredTime(rt.meta.LastResetAt)
+	cooldown := time.Duration(m.cfg.ResetCooldownSeconds) * time.Second
+	if rt.resetting {
+		rt.mu.Unlock()
+		return map[string]any{"instanceId": id, "resetting": true, "queuedRecoveryAttempted": false}, nil
+	}
+	if !lastReset.IsZero() && cooldown > 0 && now.Sub(lastReset) < cooldown {
+		wait := cooldown - now.Sub(lastReset)
+		rt.mu.Unlock()
+		return nil, rateLimitError("runtime reset cooldown is active", wait)
+	}
+	if rt.qrCancel != nil {
+		rt.qrCancel()
+		rt.qrCancel = nil
+	}
+	rt.resetting = true
+	rt.paused = false
+	rt.conflicted = false
+	rt.nextConnectAt = time.Time{}
+	rt.meta.Status = "connecting"
+	rt.meta.LastDisconnectReason = ""
+	rt.meta.LastResetAt = now.UTC().Format(time.RFC3339)
+	in := rt.meta
+	rt.mu.Unlock()
+	if err := m.store.Save(&in); err != nil {
+		rt.mu.Lock()
+		rt.resetting = false
+		rt.mu.Unlock()
+		return nil, err
+	}
+	cli.Disconnect()
+	recovered, qerr := m.store.RecoverInstanceQueue(id)
+	m.stats.resets.Add(1)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		m.connectWithLimit(rt, cli, "runtime reset")
+	}()
+	return map[string]any{
+		"instanceId":              id,
+		"resetting":               true,
+		"queuedRecoveryAttempted": qerr == nil,
+		"queuedRecovered":         recovered,
+	}, nil
 }
 
 // Delete logs out (if paired), removes the device store, the runtime, and the row.
@@ -450,6 +586,12 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	}
 	cli := rt.client
 	if cli != nil {
+		rt.mu.Lock()
+		if rt.qrCancel != nil {
+			rt.qrCancel()
+			rt.qrCancel = nil
+		}
+		rt.mu.Unlock()
 		if cli.IsLoggedIn() {
 			_ = cli.Logout(ctx) // logs out of WhatsApp and deletes the device store
 		} else {
@@ -574,6 +716,10 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (string
 	if err != nil {
 		return "", err
 	}
+	if err := m.acquireSendSlot(ctx); err != nil {
+		return "", err
+	}
+	defer m.releaseSendSlot()
 	jid, err := m.resolveRecipient(ctx, rt.client, number)
 	if err != nil {
 		return "", err
@@ -584,8 +730,10 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (string
 	}
 	resp, err := rt.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
 	if err != nil {
+		m.stats.sendFailures.Add(1)
 		return "", err
 	}
+	m.stats.sendSuccess.Add(1)
 	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
 		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
 	}
@@ -604,10 +752,16 @@ func (m *Manager) sendTextJID(ctx context.Context, id string, jid types.JID, tex
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}
-	resp, err := rt.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
-	if err != nil {
+	if err := m.acquireSendSlot(ctx); err != nil {
 		return "", err
 	}
+	defer m.releaseSendSlot()
+	resp, err := rt.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
+	if err != nil {
+		m.stats.sendFailures.Add(1)
+		return "", err
+	}
+	m.stats.sendSuccess.Add(1)
 	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
 		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
 	}
@@ -620,6 +774,10 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 	if err != nil {
 		return "", err
 	}
+	if err := m.acquireSendSlot(ctx); err != nil {
+		return "", err
+	}
+	defer m.releaseSendSlot()
 	jid, err := m.resolveRecipient(ctx, rt.client, number)
 	if err != nil {
 		return "", err
@@ -630,12 +788,15 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 	}
 	msg, err := buildMediaMessage(ctx, rt.client, mediaType, file, caption, fileName)
 	if err != nil {
+		m.stats.sendFailures.Add(1)
 		return "", err
 	}
 	resp, err := rt.client.SendMessage(ctx, jid, msg)
 	if err != nil {
+		m.stats.sendFailures.Add(1)
 		return "", err
 	}
+	m.stats.sendSuccess.Add(1)
 	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
 		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
 	}
@@ -649,6 +810,10 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 	if err != nil {
 		return "", err
 	}
+	if err := m.acquireSendSlot(ctx); err != nil {
+		return "", err
+	}
+	defer m.releaseSendSlot()
 	jid, err := m.resolveRecipient(ctx, rt.client, number)
 	if err != nil {
 		return "", err
@@ -659,12 +824,15 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 	}
 	msg, err := buildMediaMessageBytes(ctx, rt.client, mediaType, data, mime, caption, fileName)
 	if err != nil {
+		m.stats.sendFailures.Add(1)
 		return "", err
 	}
 	resp, err := rt.client.SendMessage(ctx, jid, msg)
 	if err != nil {
+		m.stats.sendFailures.Add(1)
 		return "", err
 	}
+	m.stats.sendSuccess.Add(1)
 	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
 		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
 	}
@@ -673,6 +841,17 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 }
 
 var errNotConnected = &apiError{Status: 409, Msg: "instance is not connected/logged in"}
+
+func (m *Manager) acquireSendSlot(ctx context.Context) error {
+	select {
+	case m.sendSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) releaseSendSlot() { <-m.sendSem }
 
 func (m *Manager) requireLoggedIn(id string) (*instanceRuntime, error) {
 	rt := m.get(id)

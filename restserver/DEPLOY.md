@@ -19,6 +19,11 @@ Serviço "WhatsApp" (whatsmeow/restserver) em produção, **isolado**, na EC2/Co
   Watchdog usa backoff exponencial c/ jitter (30s→10min); temp-ban (402) espera o ban expirar; client-outdated
   (405) loga alto e tenta de hora em hora (= atualizar a lib whatsmeow). SIGTERM desconecta os sockets
   limpo antes de sair (redeploy não deixa sessão suja).
+- **Resiliência de envio:** `GLOBAL_SEND_CONCURRENCY=8`, `QUEUE_WORKERS=4`,
+  `QUEUE_MAX_ATTEMPTS=5`, `QUEUE_RETRY_MAX_SECONDS=300`, `RESET_COOLDOWN_SECONDS=60`.
+  A fila fica no mesmo volume SQLite, recupera jobs após restart e espera reconexão sem
+  consumir tentativas. Não há teto artificial de instâncias; a proteção é por
+  concorrência de conexão/envio e pressão natural de CPU/memória.
 - **Webhook global (WhatsApp Cloud API):** configurável no painel (URL destino + verify token + app secret).
   Entrega mensagens e eventos confirmado(1)/cancelado(2) no envelope oficial, assinado em `X-Hub-Signature-256`.
 - **DNS:** `zap.dietsystem.com.br` A → `54.207.254.146` (DigitalOcean); TLS Let's Encrypt automático (Traefik/Coolify).

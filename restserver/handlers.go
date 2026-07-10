@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -23,7 +24,7 @@ type Handlers struct {
 	cfg Config
 }
 
-const serviceVersion = "outbound-safety-v1"
+const serviceVersion = "resilience-v2"
 
 func NewHandlers(mgr *Manager, cfg Config) *Handlers {
 	return &Handlers{mgr: mgr, cfg: cfg}
@@ -38,12 +39,15 @@ func (h *Handlers) Router() http.Handler {
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":             true,
-			"service":        "whatsmeow-restserver",
-			"version":        serviceVersion,
-			"outboundSafety": true,
+			"ok":              true,
+			"service":         "whatsmeow-restserver",
+			"version":         serviceVersion,
+			"outboundSafety":  true,
+			"persistentQueue": true,
+			"runtimeRecovery": true,
 		})
 	})
+	mux.HandleFunc("GET /metrics", h.metrics)
 
 	// Single global webhook (WhatsApp Cloud API style).
 	mux.HandleFunc("GET /webhook", h.verifyWebhook)           // public verification handshake
@@ -66,6 +70,11 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("POST /instances/{id}/consents/revoke", h.revokeConsent)
 	mux.HandleFunc("POST /instances/{id}/webhook", h.setWebhook)
 	mux.HandleFunc("POST /instances/{id}/disconnect", h.disconnect)
+	mux.HandleFunc("POST /instances/{id}/hibernate", h.hibernate)
+	mux.HandleFunc("POST /instances/{id}/resume", h.resume)
+	mux.HandleFunc("POST /instances/{id}/reset", h.resetRuntime)
+	mux.HandleFunc("GET /instances/{id}/queue", h.getQueue)
+	mux.HandleFunc("DELETE /instances/{id}/queue", h.clearQueue)
 
 	// uazapi wire-compat layer (header auth admintoken/token; see uazapi_compat.go).
 	h.registerUazapiCompat(mux)
@@ -237,14 +246,28 @@ func (h *Handlers) getContact(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) sendText(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Number string `json:"number"`
-		Text   string `json:"text"`
+		Number         string `json:"number"`
+		Text           string `json:"text"`
+		Async          bool   `json:"async"`
+		IdempotencyKey string `json:"idempotencyKey"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
 	if body.Number == "" || body.Text == "" {
 		writeErr(w, http.StatusBadRequest, "number and text are required")
+		return
+	}
+	if body.Async || r.URL.Query().Get("async") == "true" {
+		key := body.IdempotencyKey
+		if key == "" {
+			key = r.Header.Get("Idempotency-Key")
+		}
+		job, created, err := h.mgr.EnqueueText(r.PathValue("id"), body.Number, body.Text, key)
+		if handleErr(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
 	id, err := h.mgr.SendText(r.Context(), r.PathValue("id"), body.Number, body.Text)
@@ -262,17 +285,33 @@ func (h *Handlers) sendMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	// URL / base64 / data URI via JSON.
 	var body struct {
-		Number   string `json:"number"`
-		Type     string `json:"type"`
-		File     string `json:"file"`
-		Text     string `json:"text"`
-		FileName string `json:"fileName"`
+		Number         string `json:"number"`
+		Type           string `json:"type"`
+		File           string `json:"file"`
+		Text           string `json:"text"`
+		FileName       string `json:"fileName"`
+		Async          bool   `json:"async"`
+		IdempotencyKey string `json:"idempotencyKey"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
 	if body.Number == "" || body.File == "" {
 		writeErr(w, http.StatusBadRequest, "number and file are required")
+		return
+	}
+	if body.Async || r.URL.Query().Get("async") == "true" {
+		key := body.IdempotencyKey
+		if key == "" {
+			key = r.Header.Get("Idempotency-Key")
+		}
+		job, created, err := h.mgr.EnqueueMedia(r.PathValue("id"), queuedMediaPayload{
+			Number: body.Number, Type: body.Type, File: body.File, Text: body.Text, FileName: body.FileName,
+		}, key)
+		if handleErr(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
 	id, err := h.mgr.SendMedia(r.Context(), r.PathValue("id"), body.Number, body.Type, body.File, body.Text, body.FileName)
@@ -283,6 +322,10 @@ func (h *Handlers) sendMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) sendMediaUpload(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("async") == "true" {
+		writeErr(w, http.StatusBadRequest, "async multipart upload is not supported; use JSON URL/base64 media")
+		return
+	}
 	if err := r.ParseMultipartForm(64 << 20); err != nil { // 64 MB in memory, rest spooled to disk
 		writeErr(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
 		return
@@ -381,6 +424,73 @@ func (h *Handlers) disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) hibernate(w http.ResponseWriter, r *http.Request) {
+	if handleErr(w, h.mgr.Disconnect(r.PathValue("id"))) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "hibernated"})
+}
+
+func (h *Handlers) resume(w http.ResponseWriter, r *http.Request) {
+	if handleErr(w, h.mgr.Resume(r.PathValue("id"))) {
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "connecting"})
+}
+
+func (h *Handlers) resetRuntime(w http.ResponseWriter, r *http.Request) {
+	result, err := h.mgr.ResetRuntime(r.PathValue("id"))
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
+}
+
+func (h *Handlers) getQueue(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if h.mgr.get(id) == nil {
+		handleErr(w, errNotFound)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	jobs, err := h.mgr.store.ListQueue(id, r.URL.Query().Get("status"), limit)
+	if handleErr(w, err) {
+		return
+	}
+	summary, err := h.mgr.store.QueueSummary(id)
+	if handleErr(w, err) {
+		return
+	}
+	rt := h.mgr.get(id)
+	sessionReady := false
+	if rt != nil {
+		rt.mu.RLock()
+		cli := rt.client
+		sessionReady = cli != nil && cli.IsConnected() && cli.IsLoggedIn()
+		rt.mu.RUnlock()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "jobs": jobs, "sessionReady": sessionReady})
+}
+
+func (h *Handlers) clearQueue(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if h.mgr.get(id) == nil {
+		handleErr(w, errNotFound)
+		return
+	}
+	canceled, err := h.mgr.store.CancelQueue(id)
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"canceled": canceled})
+}
+
+func (h *Handlers) metrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(h.mgr.metricsText()))
 }
 
 // --- json helpers ---

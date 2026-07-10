@@ -199,8 +199,14 @@ func (m *Manager) onConnected(instanceID string) {
 	rt.meta.Status = "connected"
 	rt.loggedOut = false
 	rt.paused = false
+	rt.conflicted = false
+	rt.resetting = false
 	rt.nextConnectAt = time.Time{}
 	rt.connectFails = 0
+	rt.meta.LastDisconnectReason = ""
+	if until := parseStoredTime(rt.meta.SendingBlockedUntil); !until.IsZero() && time.Now().After(until) {
+		rt.meta.SendingBlockedUntil = ""
+	}
 	if cli.Store != nil && cli.Store.ID != nil {
 		rt.meta.JID = cli.Store.ID.String()
 		rt.meta.Owner = cli.Store.ID.User
@@ -251,7 +257,11 @@ func (m *Manager) onPairSuccess(instanceID string, v *events.PairSuccess) {
 	rt.meta.Status = "connected"
 	rt.qrCode = ""
 	rt.loggedOut = false
+	rt.paused = false
+	rt.conflicted = false
+	rt.resetting = false
 	rt.nextConnectAt = time.Time{}
+	rt.meta.LastDisconnectReason = ""
 	if v.BusinessName != "" {
 		rt.meta.ProfileName = v.BusinessName
 	}
@@ -268,6 +278,7 @@ func (m *Manager) onLoggedOut(instanceID string, v *events.LoggedOut) {
 	rt.mu.Lock()
 	rt.meta.Status = "disconnected"
 	rt.loggedOut = true // real unlink — needs a new QR; watchdog must NOT auto-reconnect
+	rt.resetting = false
 	rt.meta.LastDisconnectReason = fmt.Sprintf("logged_out (onConnect=%v reason=%v)", v.OnConnect, v.Reason)
 	in := rt.meta
 	rt.mu.Unlock()
@@ -280,17 +291,20 @@ func (m *Manager) onLoggedOut(instanceID string, v *events.LoggedOut) {
 
 // onStreamReplaced fires when ANOTHER client connected with the same session
 // (e.g. a second process, or the number linked elsewhere). Reconnecting immediately
-// would fight that client, so we log loudly and back the watchdog off for a while.
+// would fight that client, so we pause recovery until an operator resumes or
+// resets the instance after closing the competing session.
 func (m *Manager) onStreamReplaced(instanceID string) {
 	rt := m.get(instanceID)
 	if rt == nil {
 		return
 	}
 	m.log.Warnf("instance %s: stream replaced — the SAME session connected elsewhere. "+
-		"Run only ONE process per session/DB. Backing off reconnect for 5 min.", instanceID)
+		"Run only ONE process per session/DB. Automatic recovery is paused until resume/reset.", instanceID)
 	rt.mu.Lock()
 	rt.meta.Status = "disconnected"
 	rt.meta.LastDisconnectReason = "stream_replaced (mesma sessão conectou em outro lugar)"
+	rt.conflicted = true
+	rt.resetting = false
 	rt.nextConnectAt = time.Now().Add(5 * time.Minute)
 	in := rt.meta
 	rt.mu.Unlock()
@@ -319,6 +333,7 @@ func (m *Manager) onTemporaryBan(instanceID string, v *events.TemporaryBan) {
 	rt.meta.Status = "disconnected"
 	rt.meta.LastDisconnectReason = "temp_banned: " + v.String()
 	rt.meta.SendingBlockedUntil = blockedUntil.UTC().Format(time.RFC3339)
+	rt.resetting = false
 	rt.nextConnectAt = blockedUntil
 	in := rt.meta
 	rt.mu.Unlock()
@@ -341,6 +356,7 @@ func (m *Manager) onClientOutdated(instanceID string) {
 	rt.mu.Lock()
 	rt.meta.Status = "disconnected"
 	rt.meta.LastDisconnectReason = "client_outdated (405): atualizar a lib whatsmeow e redeployar"
+	rt.resetting = false
 	rt.nextConnectAt = time.Now().Add(time.Hour)
 	in := rt.meta
 	rt.mu.Unlock()
@@ -359,6 +375,7 @@ func (m *Manager) onConnectFailure(instanceID string, v *events.ConnectFailure) 
 	rt.mu.Lock()
 	rt.meta.Status = "disconnected"
 	rt.meta.LastDisconnectReason = fmt.Sprintf("connect_failure %d: %s", int(v.Reason), v.Message)
+	rt.resetting = false
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
