@@ -23,6 +23,8 @@ type Handlers struct {
 	cfg Config
 }
 
+const serviceVersion = "outbound-safety-v1"
+
 func NewHandlers(mgr *Manager, cfg Config) *Handlers {
 	return &Handlers{mgr: mgr, cfg: cfg}
 }
@@ -35,7 +37,12 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("GET /ui", h.serveUI)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":             true,
+			"service":        "whatsmeow-restserver",
+			"version":        serviceVersion,
+			"outboundSafety": true,
+		})
 	})
 
 	// Single global webhook (WhatsApp Cloud API style).

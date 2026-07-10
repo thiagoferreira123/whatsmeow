@@ -45,7 +45,7 @@ diretório de execução).
 
 | Método/Path | Body | Resposta |
 |---|---|---|
-| `GET /health` | — | `{ok:true}` (sem auth) |
+| `GET /health` | — | health/version/capacidades (sem auth) |
 | `POST /instances` | `{name, adminField01?, webhookUrl?, webhookSecret?}` | instância criada (com `id`, `token`) |
 | `GET /instances` | — | `[instância]` |
 | `GET /instances/{id}` | — | instância |
