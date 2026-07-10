@@ -11,7 +11,9 @@ ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w" -o /out/restserver ./restserver
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data
+# Coolify's container health check uses curl against /health. Keep it in the
+# runtime image so Docker health reflects the service instead of a missing tool.
+RUN apk add --no-cache ca-certificates tzdata curl && mkdir -p /data
 WORKDIR /app
 COPY --from=build /out/restserver /app/restserver
 # Sessões/keys do WhatsApp em /data (volume persistente — sobrevive a redeploys).
