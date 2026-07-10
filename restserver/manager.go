@@ -275,21 +275,27 @@ func (m *Manager) Shutdown() {
 	m.logCleanupWG.Wait()
 }
 
+const (
+	defaultUazapiWebhookEvents          = "connection,messages"
+	defaultUazapiWebhookExcludeMessages = "wasSentByApi,fromMeYes,isGroupYes"
+)
+
 // Create registers a new instance (no pairing yet — call GetQR to pair).
 func (m *Manager) Create(name, adminField01, webhookURL, webhookSecret string) (Instance, error) {
 	now := nowRFC()
 	in := Instance{
-		ID:             uuid.NewString(),
-		Name:           name,
-		Token:          randToken(),
-		AdminField01:   adminField01,
-		WebhookURL:     webhookURL,
-		WebhookSecret:  webhookSecret,
-		WebhookEvents:  "connection,messages",
-		WebhookEnabled: true,
-		Status:         "disconnected",
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:                     uuid.NewString(),
+		Name:                   name,
+		Token:                  randToken(),
+		AdminField01:           adminField01,
+		WebhookURL:             webhookURL,
+		WebhookSecret:          webhookSecret,
+		WebhookEvents:          defaultUazapiWebhookEvents,
+		WebhookExcludeMessages: defaultUazapiWebhookExcludeMessages,
+		WebhookEnabled:         true,
+		Status:                 "disconnected",
+		CreatedAt:              now,
+		UpdatedAt:              now,
 	}
 	if err := m.store.Create(&in); err != nil {
 		return Instance{}, err
@@ -665,6 +671,25 @@ func (m *Manager) SetWebhook(id, url, secret, events string, enabled bool) error
 	return m.store.Save(&in)
 }
 
+// SetUazapiWebhook updates every field supported by the uazapi simple-mode
+// webhook contract while keeping the instance secret server-controlled.
+func (m *Manager) SetUazapiWebhook(id string, cfg uazapiWebhookConfig) error {
+	rt := m.get(id)
+	if rt == nil {
+		return errNotFound
+	}
+	rt.mu.Lock()
+	rt.meta.WebhookURL = cfg.URL
+	rt.meta.WebhookEvents = strings.Join(cfg.Events, ",")
+	rt.meta.WebhookExcludeMessages = strings.Join(cfg.ExcludeMessages, ",")
+	rt.meta.WebhookEnabled = cfg.Enabled
+	rt.meta.WebhookAddURLEvents = cfg.AddURLEvents
+	rt.meta.WebhookAddURLTypesMessages = cfg.AddURLTypesMessages
+	in := rt.meta
+	rt.mu.Unlock()
+	return m.store.Save(&in)
+}
+
 // jidCacheEntry is a resolved recipient JID with an expiry.
 type jidCacheEntry struct {
 	jid types.JID
@@ -771,6 +796,7 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (messag
 	}
 	recipient := permissionKey(jid.User)
 	resolvedRecipient = recipient
+	m.rememberRecipientAlias(id, attemptedRecipient, jid)
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}

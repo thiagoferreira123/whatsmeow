@@ -15,25 +15,28 @@ var errNotFound = errors.New("instance not found")
 // The actual WhatsApp session (keys) lives in whatsmeow's own device store;
 // this row maps our public "id" to that device and holds API/webhook config.
 type Instance struct {
-	ID                   string `json:"id"`
-	Name                 string `json:"name"`
-	JID                  string `json:"jid,omitempty"`
-	Token                string `json:"token"`
-	AdminField01         string `json:"adminField01,omitempty"`
-	WebhookURL           string `json:"webhookUrl,omitempty"`
-	WebhookSecret        string `json:"webhookSecret,omitempty"`
-	WebhookEvents        string `json:"webhookEvents,omitempty"`
-	WebhookEnabled       bool   `json:"webhookEnabled"`
-	Status               string `json:"status"`
-	ProfileName          string `json:"profileName,omitempty"`
-	ProfilePicUrl        string `json:"profilePicUrl,omitempty"`
-	IsBusiness           bool   `json:"isBusiness"`
-	Owner                string `json:"owner,omitempty"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
-	LastDisconnectReason string `json:"lastDisconnectReason,omitempty"`
-	SendingBlockedUntil  string `json:"sendingBlockedUntil,omitempty"`
-	LastResetAt          string `json:"lastResetAt,omitempty"`
+	ID                         string `json:"id"`
+	Name                       string `json:"name"`
+	JID                        string `json:"jid,omitempty"`
+	Token                      string `json:"token"`
+	AdminField01               string `json:"adminField01,omitempty"`
+	WebhookURL                 string `json:"webhookUrl,omitempty"`
+	WebhookSecret              string `json:"webhookSecret,omitempty"`
+	WebhookEvents              string `json:"webhookEvents,omitempty"`
+	WebhookExcludeMessages     string `json:"webhookExcludeMessages,omitempty"`
+	WebhookEnabled             bool   `json:"webhookEnabled"`
+	WebhookAddURLEvents        bool   `json:"webhookAddUrlEvents"`
+	WebhookAddURLTypesMessages bool   `json:"webhookAddUrlTypesMessages"`
+	Status                     string `json:"status"`
+	ProfileName                string `json:"profileName,omitempty"`
+	ProfilePicUrl              string `json:"profilePicUrl,omitempty"`
+	IsBusiness                 bool   `json:"isBusiness"`
+	Owner                      string `json:"owner,omitempty"`
+	CreatedAt                  string `json:"createdAt"`
+	UpdatedAt                  string `json:"updatedAt"`
+	LastDisconnectReason       string `json:"lastDisconnectReason,omitempty"`
+	SendingBlockedUntil        string `json:"sendingBlockedUntil,omitempty"`
+	LastResetAt                string `json:"lastResetAt,omitempty"`
 }
 
 const schemaSQL = `
@@ -46,7 +49,10 @@ CREATE TABLE IF NOT EXISTS instances (
 	webhook_url            TEXT NOT NULL DEFAULT '',
 	webhook_secret         TEXT NOT NULL DEFAULT '',
 	webhook_events         TEXT NOT NULL DEFAULT '',
+	webhook_exclude_messages TEXT NOT NULL DEFAULT '',
 	webhook_enabled        INTEGER NOT NULL DEFAULT 1,
+	webhook_add_url_events INTEGER NOT NULL DEFAULT 0,
+	webhook_add_url_types_messages INTEGER NOT NULL DEFAULT 0,
 	status                 TEXT NOT NULL DEFAULT 'disconnected',
 	profile_name           TEXT NOT NULL DEFAULT '',
 	profile_pic_url        TEXT NOT NULL DEFAULT '',
@@ -69,6 +75,15 @@ CREATE TABLE IF NOT EXISTS recipient_permissions (
 	last_inbound_at TEXT NOT NULL DEFAULT '',
 	updated_at     TEXT NOT NULL,
 	PRIMARY KEY (instance_id, recipient),
+	FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS recipient_aliases (
+	instance_id        TEXT NOT NULL,
+	resolved_recipient TEXT NOT NULL,
+	requested_recipient TEXT NOT NULL,
+	updated_at         TEXT NOT NULL,
+	PRIMARY KEY (instance_id, resolved_recipient),
 	FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
 );
 
@@ -148,6 +163,9 @@ func NewStore(db *sql.DB) (*Store, error) {
 		`ALTER TABLE instances ADD COLUMN is_business INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE instances ADD COLUMN sending_blocked_until TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE instances ADD COLUMN last_reset_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE instances ADD COLUMN webhook_exclude_messages TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE instances ADD COLUMN webhook_add_url_events INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE instances ADD COLUMN webhook_add_url_types_messages INTEGER NOT NULL DEFAULT 0`,
 	} {
 		_, _ = db.Exec(alter)
 	}
@@ -180,29 +198,33 @@ func (s *Store) SetSetting(key, val string) error {
 	return err
 }
 
-const instanceCols = `id,name,jid,token,admin_field01,webhook_url,webhook_secret,webhook_events,webhook_enabled,status,profile_name,profile_pic_url,is_business,owner,created_at,updated_at,last_disconnect_reason,sending_blocked_until,last_reset_at`
+const instanceCols = `id,name,jid,token,admin_field01,webhook_url,webhook_secret,webhook_events,webhook_exclude_messages,webhook_enabled,webhook_add_url_events,webhook_add_url_types_messages,status,profile_name,profile_pic_url,is_business,owner,created_at,updated_at,last_disconnect_reason,sending_blocked_until,last_reset_at`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanInstance(s rowScanner) (Instance, error) {
 	var in Instance
-	var enabled, business int
+	var enabled, addURLEvents, addURLTypesMessages, business int
 	err := s.Scan(
 		&in.ID, &in.Name, &in.JID, &in.Token, &in.AdminField01,
-		&in.WebhookURL, &in.WebhookSecret, &in.WebhookEvents, &enabled,
+		&in.WebhookURL, &in.WebhookSecret, &in.WebhookEvents, &in.WebhookExcludeMessages,
+		&enabled, &addURLEvents, &addURLTypesMessages,
 		&in.Status, &in.ProfileName, &in.ProfilePicUrl, &business, &in.Owner,
 		&in.CreatedAt, &in.UpdatedAt, &in.LastDisconnectReason, &in.SendingBlockedUntil, &in.LastResetAt,
 	)
 	in.WebhookEnabled = enabled != 0
+	in.WebhookAddURLEvents = addURLEvents != 0
+	in.WebhookAddURLTypesMessages = addURLTypesMessages != 0
 	in.IsBusiness = business != 0
 	return in, err
 }
 
 func (s *Store) Create(in *Instance) error {
 	_, err := s.db.Exec(
-		`INSERT INTO instances (`+instanceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO instances (`+instanceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		in.ID, in.Name, in.JID, in.Token, in.AdminField01,
-		in.WebhookURL, in.WebhookSecret, in.WebhookEvents, b2i(in.WebhookEnabled),
+		in.WebhookURL, in.WebhookSecret, in.WebhookEvents, in.WebhookExcludeMessages,
+		b2i(in.WebhookEnabled), b2i(in.WebhookAddURLEvents), b2i(in.WebhookAddURLTypesMessages),
 		in.Status, in.ProfileName, in.ProfilePicUrl, b2i(in.IsBusiness), in.Owner,
 		in.CreatedAt, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.LastResetAt,
 	)
@@ -213,9 +235,11 @@ func (s *Store) Create(in *Instance) error {
 func (s *Store) Save(in *Instance) error {
 	in.UpdatedAt = nowRFC()
 	_, err := s.db.Exec(
-		`UPDATE instances SET name=?,jid=?,token=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_enabled=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=?,sending_blocked_until=?,last_reset_at=? WHERE id=?`,
+		`UPDATE instances SET name=?,jid=?,token=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_exclude_messages=?,webhook_enabled=?,webhook_add_url_events=?,webhook_add_url_types_messages=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=?,sending_blocked_until=?,last_reset_at=? WHERE id=?`,
 		in.Name, in.JID, in.Token, in.AdminField01, in.WebhookURL, in.WebhookSecret,
-		in.WebhookEvents, b2i(in.WebhookEnabled), in.Status, in.ProfileName, in.ProfilePicUrl,
+		in.WebhookEvents, in.WebhookExcludeMessages, b2i(in.WebhookEnabled),
+		b2i(in.WebhookAddURLEvents), b2i(in.WebhookAddURLTypesMessages),
+		in.Status, in.ProfileName, in.ProfilePicUrl,
 		b2i(in.IsBusiness), in.Owner, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.LastResetAt, in.ID,
 	)
 	return err

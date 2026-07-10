@@ -148,6 +148,7 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 	in := rt.metaCopy()
 	if in.WebhookURL != "" && in.WebhookEnabled {
 		senderPN, senderLID := resolveSender(v.Info)
+		senderPN = m.canonicalWebhookSenderPN(instanceID, v.Info)
 		msg := map[string]any{
 			"messageid":    v.Info.ID,
 			"text":         text,

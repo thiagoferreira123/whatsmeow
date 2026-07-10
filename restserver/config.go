@@ -14,6 +14,7 @@ type Config struct {
 	WebhookSecret             string // default app-secret for the global webhook (HMAC) / legacy x-uazapi-secret
 	WebhookURL                string // initial global webhook URL (overridable in the panel)
 	WebhookVerifyToken        string // global webhook verify token (Cloud API handshake)
+	UazapiCompatWebhookURL    string // default per-instance DietSystem webhook for uazapi-compatible instances
 	AutoReplyEnabled          bool
 	AutoReplyConfirm          string
 	AutoReplyCancel           string
@@ -43,21 +44,22 @@ func loadConfig() Config {
 		// busy_timeout(30000) rides out write bursts (pairing/history-sync storms);
 		// _txlock=immediate takes the write lock at BEGIN so concurrent write
 		// transactions wait on busy_timeout instead of failing with SQLITE_BUSY.
-		DSN:                getenv("WHATSMEOW_DSN", "file:whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"),
-		AdminAPIKey:        strings.TrimSpace(os.Getenv("ADMIN_API_KEY")),
-		WebhookSecret:      getenv("WEBHOOK_SECRET", "dev-secret"),
-		WebhookURL:         strings.TrimSpace(os.Getenv("WEBHOOK_URL")),
-		WebhookVerifyToken: strings.TrimSpace(os.Getenv("WEBHOOK_VERIFY_TOKEN")),
-		AutoReplyEnabled:   getenvBool("AUTOREPLY_ENABLED", true),
-		AutoReplyConfirm:   getenv("AUTOREPLY_CONFIRM_MSG", "✅ Sua consulta foi confirmada! Até breve."),
-		AutoReplyCancel:    getenv("AUTOREPLY_CANCEL_MSG", "❌ Sua consulta foi cancelada. Entre em contato para reagendar. \U0001F5D3️"),
-		WatchdogSeconds:    getenvInt("WATCHDOG_SECONDS", 30),
-		ConnectConcurrency: getenvInt("CONNECT_CONCURRENCY", 8),
-		DBMaxConns:         getenvInt("DB_MAX_CONNS", 8),
-		SendRatePerMinute:  getenvInt("SEND_RATE_PER_MINUTE", 30),
-		SendBurst:          getenvInt("SEND_BURST", 5),
-		RecipientCooldown:  getenvInt("SEND_RECIPIENT_COOLDOWN_SECONDS", 10),
-		RecipientDailyMax:  getenvInt("SEND_RECIPIENT_DAILY_MAX", 20),
+		DSN:                    getenv("WHATSMEOW_DSN", "file:whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"),
+		AdminAPIKey:            strings.TrimSpace(os.Getenv("ADMIN_API_KEY")),
+		WebhookSecret:          getenv("WEBHOOK_SECRET", "dev-secret"),
+		WebhookURL:             strings.TrimSpace(os.Getenv("WEBHOOK_URL")),
+		WebhookVerifyToken:     strings.TrimSpace(os.Getenv("WEBHOOK_VERIFY_TOKEN")),
+		UazapiCompatWebhookURL: strings.TrimSpace(os.Getenv("UAZAPI_COMPAT_WEBHOOK_URL")),
+		AutoReplyEnabled:       getenvBool("AUTOREPLY_ENABLED", true),
+		AutoReplyConfirm:       getenv("AUTOREPLY_CONFIRM_MSG", "✅ Sua consulta foi confirmada! Até breve."),
+		AutoReplyCancel:        getenv("AUTOREPLY_CANCEL_MSG", "❌ Sua consulta foi cancelada. Entre em contato para reagendar. \U0001F5D3️"),
+		WatchdogSeconds:        getenvInt("WATCHDOG_SECONDS", 30),
+		ConnectConcurrency:     getenvInt("CONNECT_CONCURRENCY", 8),
+		DBMaxConns:             getenvInt("DB_MAX_CONNS", 8),
+		SendRatePerMinute:      getenvInt("SEND_RATE_PER_MINUTE", 30),
+		SendBurst:              getenvInt("SEND_BURST", 5),
+		RecipientCooldown:      getenvInt("SEND_RECIPIENT_COOLDOWN_SECONDS", 10),
+		RecipientDailyMax:      getenvInt("SEND_RECIPIENT_DAILY_MAX", 20),
 		// SEND_REQUIRE_CONSENT is kept as a backwards-compatible alias. This is
 		// strictly a local ledger; the unofficial Web client cannot query a
 		// WhatsApp/Meta consent state.

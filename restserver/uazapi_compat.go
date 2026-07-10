@@ -10,6 +10,42 @@ import (
 // admintoken/token, uazapi-shaped responses). Outbound webhooks in uazapi format
 // are emitted by events.go when an instance has a WebhookURL set (via POST /webhook).
 
+type uazapiWebhookConfig struct {
+	ID                  string   `json:"id"`
+	Enabled             bool     `json:"enabled"`
+	URL                 string   `json:"url"`
+	Events              []string `json:"events"`
+	ExcludeMessages     []string `json:"excludeMessages"`
+	AddURLEvents        bool     `json:"addUrlEvents"`
+	AddURLTypesMessages bool     `json:"addUrlTypesMessages"`
+}
+
+func splitWebhookCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func uazapiWebhookConfigFromInstance(in Instance) uazapiWebhookConfig {
+	return uazapiWebhookConfig{
+		ID:                  in.ID,
+		Enabled:             in.WebhookEnabled,
+		URL:                 in.WebhookURL,
+		Events:              splitWebhookCSV(in.WebhookEvents),
+		ExcludeMessages:     splitWebhookCSV(in.WebhookExcludeMessages),
+		AddURLEvents:        in.WebhookAddURLEvents,
+		AddURLTypesMessages: in.WebhookAddURLTypesMessages,
+	}
+}
+
 func (h *Handlers) registerUazapiCompat(mux *http.ServeMux) {
 	mux.HandleFunc("POST /instance/init", h.uzInit)
 	mux.HandleFunc("POST /instance/connect", h.uzConnect)
@@ -124,7 +160,12 @@ func (h *Handlers) uzInit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	in, err := h.mgr.Create(body.Name, body.AdminField01, "", "")
+	in, err := h.mgr.Create(
+		body.Name,
+		body.AdminField01,
+		h.cfg.UazapiCompatWebhookURL,
+		h.cfg.WebhookSecret,
+	)
 	if handleErr(w, err) {
 		return
 	}
@@ -214,9 +255,12 @@ func (h *Handlers) uzSetWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		URL     string   `json:"url"`
-		Enabled *bool    `json:"enabled"`
-		Events  []string `json:"events"`
+		URL                 string   `json:"url"`
+		Enabled             *bool    `json:"enabled"`
+		Events              []string `json:"events"`
+		ExcludeMessages     []string `json:"excludeMessages"`
+		AddURLEvents        bool     `json:"addUrlEvents"`
+		AddURLTypesMessages bool     `json:"addUrlTypesMessages"`
 	}
 	if !readJSON(w, r, &body) {
 		return
@@ -225,10 +269,31 @@ func (h *Handlers) uzSetWebhook(w http.ResponseWriter, r *http.Request) {
 	if body.Enabled != nil {
 		enabled = *body.Enabled
 	}
-	if handleErr(w, h.mgr.SetWebhook(in.ID, body.URL, "", strings.Join(body.Events, ","), enabled)) {
+	if strings.TrimSpace(body.URL) == "" {
+		writeErr(w, http.StatusBadRequest, "url is required")
 		return
 	}
-	writeJSON(w, http.StatusOK, []map[string]any{{"url": body.URL, "enabled": enabled, "events": body.Events}})
+	config := uazapiWebhookConfig{
+		ID:                  in.ID,
+		Enabled:             enabled,
+		URL:                 body.URL,
+		Events:              body.Events,
+		ExcludeMessages:     body.ExcludeMessages,
+		AddURLEvents:        body.AddURLEvents,
+		AddURLTypesMessages: body.AddURLTypesMessages,
+	}
+	if handleErr(w, h.mgr.SetUazapiWebhook(in.ID, config)) {
+		return
+	}
+	writeJSON(w, http.StatusOK, []uazapiWebhookConfig{config})
+}
+
+func (h *Handlers) uzGetWebhook(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, []uazapiWebhookConfig{uazapiWebhookConfigFromInstance(in)})
 }
 
 func (h *Handlers) uzSendText(w http.ResponseWriter, r *http.Request) {

@@ -52,7 +52,7 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("GET /metrics", h.metrics)
 
 	// Single global webhook (WhatsApp Cloud API style).
-	mux.HandleFunc("GET /webhook", h.verifyWebhook)           // public verification handshake
+	mux.HandleFunc("GET /webhook", h.getOrVerifyWebhook)      // uazapi config by token, otherwise Cloud handshake
 	mux.HandleFunc("GET /webhook/config", h.getWebhookConfig) // panel (auth)
 	mux.HandleFunc("POST /webhook/config", h.setWebhookConfig)
 
@@ -195,6 +195,14 @@ func (h *Handlers) getStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // verifyWebhook implements the WhatsApp Cloud API verification handshake.
+func (h *Handlers) getOrVerifyWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("token") != "" {
+		h.uzGetWebhook(w, r)
+		return
+	}
+	h.verifyWebhook(w, r)
+}
+
 func (h *Handlers) verifyWebhook(w http.ResponseWriter, r *http.Request) {
 	gw := h.mgr.GetGlobalWebhook()
 	q := r.URL.Query()

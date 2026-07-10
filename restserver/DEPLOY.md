@@ -10,7 +10,8 @@ Serviço "WhatsApp" (whatsmeow/restserver) em produção, **isolado**, na EC2/Co
   `https://coolify.dietsystem.com.br/webhooks/source/github/events/manual` → rebuild + redeploy automático.
 - **Persistência:** named volume `whatsmeow-zap-data` montado em `/data` (sessões/keys do WhatsApp sobrevivem a redeploys);
   SQLite WAL em `/data/whatsmeow.db`.
-- **Env vars (Coolify):** `ADMIN_API_KEY` (auth do painel/API), `WEBHOOK_SECRET` (HMAC default do webhook global),
+- **Env vars (Coolify):** `ADMIN_API_KEY` (auth do painel/API), `WEBHOOK_SECRET` (HMAC default do webhook global e header `x-uazapi-secret`),
+  `UAZAPI_COMPAT_WEBHOOK_URL` (destino Uazapi-compatible aplicado a novas instâncias), `AUTOREPLY_ENABLED=false` quando o DietSystem processa `1`/`2`,
   `WATCHDOG_SECONDS=30`, `PORT=8080`, `INSTANCE_LOG_RETENTION_DAYS=7` e
   `INSTANCE_LOG_CLEANUP_INTERVAL_MINUTES=60`. (`WHATSMEOW_DSN` vem do Dockerfile apontando p/ `/data`.)
 - **Tuning de escala (defaults no código/Dockerfile, override por env):** `CONNECT_CONCURRENCY=8`

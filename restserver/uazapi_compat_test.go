@@ -1,0 +1,257 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
+)
+
+type uazapiWebhookResponse struct {
+	ID                  string   `json:"id"`
+	Enabled             bool     `json:"enabled"`
+	URL                 string   `json:"url"`
+	Events              []string `json:"events"`
+	ExcludeMessages     []string `json:"excludeMessages"`
+	AddURLEvents        bool     `json:"addUrlEvents"`
+	AddURLTypesMessages bool     `json:"addUrlTypesMessages"`
+}
+
+func testUazapiCompatManager(t *testing.T, cfg Config) *Manager {
+	t.Helper()
+	dsn := fmt.Sprintf("file:uazapi-compat-%d?mode=memory&cache=shared&_pragma=foreign_keys(on)", time.Now().UnixNano())
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	container := sqlstore.NewWithDB(db, "sqlite3", waLog.Noop)
+	if err := container.Upgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewManager(container, store, cfg, waLog.Noop)
+}
+
+func decodeUazapiWebhookResponse(t *testing.T, rec *httptest.ResponseRecorder) []uazapiWebhookResponse {
+	t.Helper()
+	var body []uazapiWebhookResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
+	}
+	return body
+}
+
+func TestUazapiCompatMessagePayloadMatchesDietSystemContract(t *testing.T) {
+	received := make(chan struct {
+		secret string
+		body   map[string]any
+	}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode webhook body: %v", err)
+		}
+		received <- struct {
+			secret string
+			body   map[string]any
+		}{secret: r.Header.Get("x-uazapi-secret"), body: body}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	in := Instance{
+		ID:           "instance-id",
+		Name:         "nutricionist_42",
+		Token:        "instance-token",
+		AdminField01: "42",
+	}
+	payload := messageWebhookPayload(in, map[string]any{
+		"messageid":    "message-id",
+		"text":         "1",
+		"fromMe":       false,
+		"wasSentByApi": false,
+		"isGroup":      false,
+		"sender_pn":    "5567999999999@s.whatsapp.net",
+	})
+	NewWebhookSender().deliver(server.URL, "shared-secret", payload)
+
+	select {
+	case got := <-received:
+		if got.secret != "shared-secret" {
+			t.Fatalf("x-uazapi-secret = %q, want shared-secret", got.secret)
+		}
+		if got.body["EventType"] != "messages" || got.body["token"] != "instance-token" {
+			t.Fatalf("unexpected webhook envelope: %#v", got.body)
+		}
+		message, ok := got.body["message"].(map[string]any)
+		if !ok {
+			t.Fatalf("message payload missing: %#v", got.body["message"])
+		}
+		if message["messageid"] != "message-id" || message["text"] != "1" || message["sender_pn"] != "5567999999999@s.whatsapp.net" {
+			t.Fatalf("unexpected message payload: %#v", message)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for uazapi-compatible webhook")
+	}
+}
+
+func TestUazapiCompatWebhookRestoresRequestedBrazilianMobileNumber(t *testing.T) {
+	received := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode webhook body: %v", err)
+		}
+		received <- body
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	m := testUazapiCompatManager(t, Config{})
+	in, err := m.Create("nutricionist_46", "46", server.URL, "shared-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const requested = "5567991374895"
+	const resolved = "556791374895"
+	m.rememberRecipientAlias(in.ID, requested, types.NewJID(resolved, types.DefaultUserServer))
+
+	resolvedJID := types.NewJID(resolved, types.DefaultUserServer)
+	info := types.MessageInfo{
+		MessageSource: types.MessageSource{Chat: resolvedJID, Sender: resolvedJID},
+		ID:            "incoming-message-id",
+		Timestamp:     time.Now(),
+	}
+	m.onMessage(in.ID, &events.Message{
+		Info:    info,
+		Message: &waE2E.Message{Conversation: proto.String("1")},
+	})
+
+	select {
+	case body := <-received:
+		message, ok := body["message"].(map[string]any)
+		if !ok {
+			t.Fatalf("message payload missing: %#v", body)
+		}
+		if got := message["sender_pn"]; got != requested+"@s.whatsapp.net" {
+			t.Fatalf("sender_pn = %q, want canonical requested number", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for uazapi-compatible webhook")
+	}
+}
+
+func TestUazapiCompatWebhookPostPersistsAndGetReturnsArray(t *testing.T) {
+	m, _ := testPolicyManager(t, Config{})
+	if err := m.SetGlobalWebhook(GlobalWebhook{VerifyToken: "cloud-verify", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	router := NewHandlers(m, Config{}).Router()
+
+	postBody := `{
+		"url":"https://api.example.test/api/webhooks/uazapi",
+		"enabled":true,
+		"events":["connection","messages"],
+		"excludeMessages":["wasSentByApi","fromMeYes","isGroupYes"],
+		"addUrlEvents":false,
+		"addUrlTypesMessages":false
+	}`
+	postReq := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(postBody))
+	postReq.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("token", "token")
+	postRec := httptest.NewRecorder()
+	router.ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("POST /webhook status=%d body=%s", postRec.Code, postRec.Body.String())
+	}
+	postConfig := decodeUazapiWebhookResponse(t, postRec)
+	if len(postConfig) != 1 || postConfig[0].ID != "instance-1" || len(postConfig[0].ExcludeMessages) != 3 {
+		t.Fatalf("POST /webhook response=%#v", postConfig)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/webhook", nil)
+	getReq.Header.Set("token", "token")
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /webhook status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	getConfig := decodeUazapiWebhookResponse(t, getRec)
+	if len(getConfig) != 1 || !reflect.DeepEqual(getConfig[0], postConfig[0]) {
+		t.Fatalf("GET /webhook response=%#v, want %#v", getConfig, postConfig)
+	}
+
+	verifyReq := httptest.NewRequest(http.MethodGet, "/webhook?hub.mode=subscribe&hub.verify_token=cloud-verify&hub.challenge=challenge-ok", nil)
+	verifyRec := httptest.NewRecorder()
+	router.ServeHTTP(verifyRec, verifyReq)
+	if verifyRec.Code != http.StatusOK || verifyRec.Body.String() != "challenge-ok" {
+		t.Fatalf("Cloud handshake status=%d body=%q", verifyRec.Code, verifyRec.Body.String())
+	}
+}
+
+func TestUazapiCompatInitCreatesInstanceWithDietSystemWebhook(t *testing.T) {
+	t.Setenv("ADMIN_API_KEY", "admin-secret")
+	t.Setenv("WEBHOOK_SECRET", "shared-webhook-secret")
+	t.Setenv("UAZAPI_COMPAT_WEBHOOK_URL", "https://api.example.test/api/webhooks/uazapi")
+	t.Setenv("AUTOREPLY_ENABLED", "false")
+	cfg := loadConfig()
+	m := testUazapiCompatManager(t, cfg)
+	router := NewHandlers(m, cfg).Router()
+
+	initReq := httptest.NewRequest(http.MethodPost, "/instance/init", strings.NewReader(`{"name":"nutricionist_42","adminField01":"42"}`))
+	initReq.Header.Set("Content-Type", "application/json")
+	initReq.Header.Set("admintoken", "admin-secret")
+	initRec := httptest.NewRecorder()
+	router.ServeHTTP(initRec, initReq)
+	if initRec.Code != http.StatusOK {
+		t.Fatalf("POST /instance/init status=%d body=%s", initRec.Code, initRec.Body.String())
+	}
+	var created struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(initRec.Body).Decode(&created); err != nil || created.Token == "" {
+		t.Fatalf("decode created instance: token=%q err=%v", created.Token, err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/webhook", nil)
+	getReq.Header.Set("token", created.Token)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /webhook status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	configs := decodeUazapiWebhookResponse(t, getRec)
+	if len(configs) != 1 {
+		t.Fatalf("GET /webhook response=%#v", configs)
+	}
+	got := configs[0]
+	if got.URL != "https://api.example.test/api/webhooks/uazapi" || !got.Enabled {
+		t.Fatalf("new instance webhook=%#v", got)
+	}
+	if strings.Join(got.Events, ",") != "connection,messages" {
+		t.Fatalf("events=%v", got.Events)
+	}
+	if strings.Join(got.ExcludeMessages, ",") != "wasSentByApi,fromMeYes,isGroupYes" {
+		t.Fatalf("excludeMessages=%v", got.ExcludeMessages)
+	}
+}

@@ -31,6 +31,7 @@ diretório de execução).
 | `WHATSMEOW_DSN` | `file:whatsmeow.db?_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)` | DSN SQLite (modernc) |
 | `ADMIN_API_KEY` | *(vazio)* | se setado, exige `Authorization: Bearer <key>` (ou header `token`); vazio = auth off |
 | `WEBHOOK_SECRET` | `dev-secret` | valor do header `x-uazapi-secret` nos webhooks de saída |
+| `UAZAPI_COMPAT_WEBHOOK_URL` | *(vazio)* | webhook por instância aplicado automaticamente ao criar via `POST /instance/init` |
 | `AUTOREPLY_ENABLED` | `true` | liga a auto-resposta embutida de confirmação 1/2 |
 | `AUTOREPLY_CONFIRM_MSG` | ✅ Sua consulta foi confirmada! Até breve. | resposta ao `1` |
 | `AUTOREPLY_CANCEL_MSG` | ❌ Sua consulta foi cancelada... | resposta ao `2` |
@@ -59,6 +60,8 @@ Postman, Insomnia e geradores de SDK está em **`GET /openapi.json`** (OpenAPI 3
 |---|---|---|
 | `GET /health` | — | health/version/capacidades (sem auth) |
 | `GET /metrics` | — | métricas Prometheus (com auth administrativa) |
+| `GET /webhook` + header `token` | — | array com a configuração Uazapi-compatible da instância |
+| `POST /webhook` + header `token` | `{url, enabled, events, excludeMessages, addUrlEvents?, addUrlTypesMessages?}` | array com a configuração persistida |
 | `POST /instances` | `{name, adminField01?, webhookUrl?, webhookSecret?}` | instância criada (com `id`, `token`) |
 | `GET /instances` | — | `[instância]` |
 | `GET /instances/{id}` | — | instância |
@@ -145,10 +148,11 @@ curl.exe -s -o NUL -w "%{http_code}" -X DELETE "$base/instances/$id"   # 204
 ### Testar o fluxo 1/2 (confirmação de consulta)
 
 Com a instância conectada, mande **`1`** (ou **`2`**) do seu celular pessoal para o número logado.
-Com `AUTOREPLY_ENABLED=true` o serviço responde automaticamente (confirma/cancela). Se a instância
-tiver `webhookUrl` configurado, o evento também é encaminhado no formato uazapi (header
-`x-uazapi-secret`) — aponte para `https://webhook.site/<id>` ou para o `/webhooks/uazapi` do web local
-para inspecionar o payload.
+Quando o DietSystem é responsável por confirmar/cancelar a consulta, use
+`AUTOREPLY_ENABLED=false`: o serviço apenas encaminha o evento no formato uazapi
+(header `x-uazapi-secret`) e a API responde depois de persistir o novo status.
+`UAZAPI_COMPAT_WEBHOOK_URL` faz cada nova instância já nascer com esse destino;
+`GET /webhook` com o token da instância confirma a configuração persistida.
 
 > ⚠️ Nota: `Invoke-WebRequest -Method Delete` pode falhar no PowerShell 5.1 (modo NonInteractive);
 > use `curl.exe -X DELETE` ou `Invoke-RestMethod -Method Delete`.
