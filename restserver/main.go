@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -21,7 +22,8 @@ import (
 
 func main() {
 	cfg := loadConfig()
-	ctx := context.Background()
+	ctx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	dbLog := waLog.Stdout("DB", "INFO", true)
 	waClientLog := waLog.Stdout("WA", "INFO", true)
@@ -49,12 +51,15 @@ func main() {
 	}
 
 	mgr := NewManager(container, store, cfg, waClientLog)
-	if err := mgr.LoadAll(ctx); err != nil {
-		log.Printf("warning: failed to load existing instances: %v", err)
+	mgr.SetRuntimeActive(false)
+	hostname, _ := os.Hostname()
+	ownerID := hostname + ":" + strconv.Itoa(os.Getpid())
+	leaseTTL := time.Duration(cfg.RuntimeLeaseTTLSeconds) * time.Second
+	leaseRetry := time.Duration(cfg.RuntimeLeaseRetrySeconds) * time.Second
+	lease, err := newRuntimeLease(db, ownerID, leaseTTL)
+	if err != nil {
+		log.Fatalf("init runtime lease: %v", err)
 	}
-	mgr.StartQueueWorkers()
-	mgr.StartLogCleanup()
-	mgr.StartWatchdog(time.Duration(cfg.WatchdogSeconds) * time.Second)
 
 	handlers := NewHandlers(mgr, cfg)
 	srv := &http.Server{
@@ -76,16 +81,53 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown (SIGTERM = Coolify/docker stop): close the websockets
-	// cleanly so WhatsApp sees a proper disconnect and re-login on boot is instant.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	log.Printf("runtime standby: waiting for exclusive WhatsApp session ownership")
+	if err := lease.Wait(ctx, leaseRetry); err != nil {
+		log.Printf("runtime lease wait stopped: %v", err)
+		shutdownHTTP(srv)
+		return
+	}
+	log.Printf("runtime lease acquired: loading and connecting persisted sessions")
+	if err := store.RecoverAfterRuntimeTakeover(); err != nil {
+		log.Printf("failed to recover outbound queue: %v", err)
+		_ = lease.Release(context.Background())
+		shutdownHTTP(srv)
+		return
+	}
+	if err := mgr.LoadAll(ctx); err != nil {
+		log.Printf("failed to load existing instances: %v", err)
+		_ = lease.Release(context.Background())
+		shutdownHTTP(srv)
+		return
+	}
+	mgr.StartQueueWorkers()
+	mgr.StartLogCleanup()
+	mgr.StartWatchdog(time.Duration(cfg.WatchdogSeconds) * time.Second)
+	mgr.SetRuntimeActive(true)
+
+	leaseLost := make(chan error, 1)
+	go func() { leaseLost <- lease.Maintain(ctx, leaseRetry) }()
+	select {
+	case <-ctx.Done():
+	case err := <-leaseLost:
+		log.Printf("runtime lease lost: %v", err)
+	}
+
+	mgr.SetRuntimeActive(false)
 	log.Printf("shutting down: draining HTTP and disconnecting clients…")
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	shutdownHTTP(srv)
+	mgr.Shutdown()
+	releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRelease()
+	if err := lease.Release(releaseCtx); err != nil {
+		log.Printf("release runtime lease: %v", err)
+	}
+	log.Printf("shutdown complete")
+}
+
+func shutdownHTTP(srv *http.Server) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
-	mgr.Shutdown()
-	log.Printf("shutdown complete")
 }

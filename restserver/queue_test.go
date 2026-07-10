@@ -46,7 +46,7 @@ func TestQueueIdempotencyAndPerInstanceSerialization(t *testing.T) {
 	}
 }
 
-func TestQueueRecoversProcessingJobsAfterRestart(t *testing.T) {
+func TestStandbyStoreDoesNotRecoverJobsUntilRuntimeTakeover(t *testing.T) {
 	m, store := testPolicyManager(t, Config{QueueMaxAttempts: 5})
 	job, _, err := m.EnqueueText("instance-1", "5565999999999", "recover", "recover-key")
 	if err != nil {
@@ -56,6 +56,13 @@ func TestQueueRecoversProcessingJobsAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := NewStore(store.db); err != nil {
+		t.Fatal(err)
+	}
+	processing, err := store.GetQueueByKey("instance-1", "recover-key")
+	if err != nil || processing.Status != queueProcessing {
+		t.Fatalf("standby changed active job = %#v, %v", processing, err)
+	}
+	if err := store.RecoverAfterRuntimeTakeover(); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := store.GetQueueByKey("instance-1", "recover-key")

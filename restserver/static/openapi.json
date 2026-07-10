@@ -39,7 +39,8 @@
     }
   },
   "paths": {
-    "/health": {"get": {"tags": ["Sistema"], "summary": "Verificar saúde e versão", "security": [], "responses": {"200": {"description": "Serviço saudável", "content": {"application/json": {"example": {"ok": true, "service": "whatsmeow-restserver", "version": "docs-v1"}}}}}}},
+    "/health": {"get": {"tags": ["Sistema"], "summary": "Verificar prontidão e posse do runtime", "security": [], "responses": {"200": {"description": "Runtime ativo", "content": {"application/json": {"example": {"ok": true, "service": "whatsmeow-restserver", "version": "runtime-lease-v1", "runtimeOwner": true}}}}, "503": {"description": "Container em standby"}}}},
+    "/live": {"get": {"tags": ["Sistema"], "summary": "Verificar se o processo está vivo", "security": [], "responses": {"200": {"description": "Processo vivo, inclusive em standby"}}}},
     "/metrics": {"get": {"tags": ["Sistema"], "summary": "Obter métricas Prometheus", "security": [{"bearerAuth": []}], "responses": {"200": {"description": "Métricas", "content": {"text/plain": {"schema": {"type": "string"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}}}},
     "/webhook/config": {
       "get": {"tags": ["Sistema", "Webhooks"], "summary": "Ler webhook global", "security": [{"bearerAuth": []}], "responses": {"200": {"description": "Configuração atual"}, "401": {"$ref": "#/components/responses/Unauthorized"}}},

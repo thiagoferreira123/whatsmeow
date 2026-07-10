@@ -24,7 +24,7 @@ type Handlers struct {
 	cfg Config
 }
 
-const serviceVersion = "docs-v1"
+const serviceVersion = "runtime-lease-v1"
 
 func NewHandlers(mgr *Manager, cfg Config) *Handlers {
 	return &Handlers{mgr: mgr, cfg: cfg}
@@ -40,14 +40,23 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("GET /openapi.json", h.serveOpenAPI)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":              true,
+		active := h.mgr.RuntimeActive()
+		status := http.StatusOK
+		if !active {
+			status = http.StatusServiceUnavailable
+		}
+		writeJSON(w, status, map[string]any{
+			"ok":              active,
 			"service":         "whatsmeow-restserver",
 			"version":         serviceVersion,
 			"outboundSafety":  true,
 			"persistentQueue": true,
 			"runtimeRecovery": true,
+			"runtimeOwner":    h.mgr.RuntimeActive(),
 		})
+	})
+	mux.HandleFunc("GET /live", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "whatsmeow-restserver"})
 	})
 	mux.HandleFunc("GET /metrics", h.metrics)
 
@@ -82,15 +91,30 @@ func (h *Handlers) Router() http.Handler {
 	// uazapi wire-compat layer (header auth admintoken/token; see uazapi_compat.go).
 	h.registerUazapiCompat(mux)
 
-	return h.withAuth(mux)
+	return h.withAuth(h.withRuntimeOwner(mux))
 }
 
 // --- middleware ---
 
+func (h *Handlers) withRuntimeOwner(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.mgr.RuntimeActive() || isStandbySafePath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Retry-After", "2")
+		writeErr(w, http.StatusServiceUnavailable, "WhatsApp runtime is waiting for session ownership")
+	})
+}
+
+func isStandbySafePath(path string) bool {
+	return path == "/health" || path == "/live" || path == "/metrics" || path == "/" || path == "/ui" || path == "/docs" || path == "/openapi.json"
+}
+
 // withAuth checks a global API key unless ADMIN_API_KEY is empty. /health is open.
 func (h *Handlers) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.cfg.AdminAPIKey == "" || r.URL.Path == "/health" || r.URL.Path == "/" || r.URL.Path == "/ui" || r.URL.Path == "/docs" || r.URL.Path == "/openapi.json" || r.URL.Path == "/webhook" || isUazapiCompatPath(r.URL.Path) {
+		if h.cfg.AdminAPIKey == "" || r.URL.Path == "/health" || r.URL.Path == "/live" || r.URL.Path == "/" || r.URL.Path == "/ui" || r.URL.Path == "/docs" || r.URL.Path == "/openapi.json" || r.URL.Path == "/webhook" || isUazapiCompatPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

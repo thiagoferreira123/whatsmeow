@@ -43,7 +43,7 @@ func TestDocumentationRoutesArePublicAndComplete(t *testing.T) {
 		t.Fatalf("openapi version=%q", spec.OpenAPI)
 	}
 	expectedPaths := []string{
-		"/health", "/metrics", "/webhook/config", "/webhook", "/instances", "/instances/{id}",
+		"/health", "/live", "/metrics", "/webhook/config", "/webhook", "/instances", "/instances/{id}",
 		"/instances/{id}/qr", "/instances/{id}/qr.png", "/instances/{id}/status",
 		"/instances/{id}/profile", "/instances/{id}/contact", "/instances/{id}/send/text",
 		"/instances/{id}/send/media", "/instances/{id}/queue", "/instances/{id}/logs",

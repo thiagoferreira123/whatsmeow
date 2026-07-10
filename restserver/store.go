@@ -173,13 +173,20 @@ func NewStore(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
-	// A process may stop after claiming a job. Make those jobs eligible again;
-	// idempotency keys prevent clients from creating duplicates while recovering.
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, _ = db.Exec(`UPDATE outbound_queue SET status='queued', available_at=?, updated_at=?, last_error='recovered after process restart' WHERE status='processing'`, now, now)
-	cutoff := time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
-	_, _ = db.Exec(`DELETE FROM outbound_queue WHERE status IN ('sent','failed','canceled') AND updated_at<?`, cutoff)
 	return &Store{db: db}, nil
+}
+
+// RecoverAfterRuntimeTakeover mutates queue state only after this process owns
+// the runtime lease. A rolling-deploy standby must not reset jobs being handled
+// by the still-active process.
+func (s *Store) RecoverAfterRuntimeTakeover() error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`UPDATE outbound_queue SET status='queued', available_at=?, updated_at=?, last_error='recovered after process restart' WHERE status='processing'`, now, now); err != nil {
+		return err
+	}
+	cutoff := time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(`DELETE FROM outbound_queue WHERE status IN ('sent','failed','canceled') AND updated_at<?`, cutoff)
+	return err
 }
 
 // GetSetting returns the value for key, or "" if unset.

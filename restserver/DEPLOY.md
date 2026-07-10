@@ -17,6 +17,9 @@ Serviço "WhatsApp" (whatsmeow/restserver) em produção, **isolado**, na EC2/Co
 - **Tuning de escala (defaults no código/Dockerfile, override por env):** `CONNECT_CONCURRENCY=8`
   (máx. de `Connect()` simultâneos no boot/watchdog — evita thundering herd com centenas de instâncias),
   `DB_MAX_CONNS=8` (pool SQLite), `GOMEMLIMIT=1750MiB` (soft cap do GC; a EC2 é compartilhada com o prod).
+  `RUNTIME_LEASE_TTL_SECONDS=30` e `RUNTIME_LEASE_RETRY_SECONDS=2` coordenam o handoff
+  exclusivo no SQLite compartilhado: `/live` permanece 200 no standby, enquanto `/health`
+  só fica 200 no container que possui e carregou as sessões.
   SQLite: WAL + `synchronous(NORMAL)` + `busy_timeout(30000)` + `_txlock=immediate` (sem SQLITE_BUSY sob carga).
   Watchdog usa backoff exponencial c/ jitter (30s→10min); temp-ban (402) espera o ban expirar; client-outdated
   (405) loga alto e tenta de hora em hora (= atualizar a lib whatsmeow). SIGTERM desconecta os sockets
@@ -31,6 +34,10 @@ Serviço "WhatsApp" (whatsmeow/restserver) em produção, **isolado**, na EC2/Co
 - **DNS:** `zap.dietsystem.com.br` A → `54.207.254.146` (DigitalOcean); TLS Let's Encrypt automático (Traefik/Coolify).
 
 Redeploy manual: `GET https://coolify.dietsystem.com.br/api/v1/deploy?uuid=ww1t3zwj4d1q00ez6ur0d0oe` (Bearer COOLIFY_API_TOKEN).
+
+> **Primeiro deploy da versão com runtime lease:** parar o app antigo antes de iniciar
+> o novo, pois releases anteriores não participam do lease. Depois dessa migração
+> inicial, os redeploys rolling fazem o handoff automaticamente sem sobrepor sessões.
 
 ## Política de saída
 

@@ -49,6 +49,8 @@ diretório de execução).
 | `RESET_COOLDOWN_SECONDS` | `60` | intervalo mínimo entre resets controlados da mesma instância |
 | `INSTANCE_LOG_RETENTION_DAYS` | `7` | retenção máxima do histórico estruturado por instância |
 | `INSTANCE_LOG_CLEANUP_INTERVAL_MINUTES` | `60` | intervalo da limpeza automática de logs expirados |
+| `RUNTIME_LEASE_TTL_SECONDS` | `30` | prazo da posse exclusiva das sessões entre containers rolling |
+| `RUNTIME_LEASE_RETRY_SECONDS` | `2` | intervalo de heartbeat e tentativa de handoff |
 
 ## Endpoints
 
@@ -58,7 +60,8 @@ Postman, Insomnia e geradores de SDK está em **`GET /openapi.json`** (OpenAPI 3
 
 | Método/Path | Body | Resposta |
 |---|---|---|
-| `GET /health` | — | health/version/capacidades (sem auth) |
+| `GET /health` | — | readiness e posse das sessões; standby retorna 503 (sem auth) |
+| `GET /live` | — | liveness do processo, inclusive durante standby (sem auth) |
 | `GET /metrics` | — | métricas Prometheus (com auth administrativa) |
 | `GET /webhook` + header `token` | — | array com a configuração Uazapi-compatible da instância |
 | `POST /webhook` + header `token` | `{url, enabled, events, excludeMessages, addUrlEvents?, addUrlTypesMessages?}` | array com a configuração persistida |
@@ -113,6 +116,11 @@ mensagem fica no SQLite e passa por apenas um worker por instância. Se o WhatsA
 o job muda para `waiting_connection` sem consumir tentativa; quando a sessão volta, o
 envio continua. Falhas transitórias usam backoff exponencial, erros permanentes viram
 `failed`, e jobs `processing` voltam para `queued` após restart do container.
+
+Em redeploy rolling, somente um container recebe a posse das sessões. O novo
+container fica vivo em `/live`, mas responde `503` em `/health` e nas rotas da API
+até o anterior desconectar todos os sockets e liberar o lease no SQLite compartilhado.
+Assim, uma mesma credencial nunca fica conectada em dois processos simultaneamente.
 
 Use `Idempotency-Key` ou `idempotencyKey` para que retries HTTP devolvam o mesmo job em
 vez de duplicar a mensagem. Upload multipart continua exclusivamente síncrono; para

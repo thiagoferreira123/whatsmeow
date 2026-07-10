@@ -95,7 +95,8 @@ const groups=[
 {id:'uazapi',name:'Compatibilidade UAZAPI',description:'Rotas compatíveis para migração sem alterar consumidores.'}
 ];
 const endpoints=[
-{g:'system',m:'GET',p:'/health',s:'Verificar saúde e versão',a:'Público',d:'Retorna capacidades ativas e a versão implantada.',r:{ok:true,service:'whatsmeow-restserver',version:'docs-v1'}},
+{g:'system',m:'GET',p:'/health',s:'Verificar prontidão e posse do runtime',a:'Público',d:'Retorna 200 apenas no container que possui as sessões; standby retorna 503.',r:{ok:true,service:'whatsmeow-restserver',version:'runtime-lease-v1',runtimeOwner:true}},
+{g:'system',m:'GET',p:'/live',s:'Verificar se o processo está vivo',a:'Público',d:'Retorna 200 inclusive enquanto o container aguarda o handoff exclusivo.',r:{ok:true,service:'whatsmeow-restserver'}},
 {g:'system',m:'GET',p:'/metrics',s:'Métricas Prometheus',a:'Bearer',d:'Expõe contadores e indicadores operacionais em texto Prometheus.',r:'whatsmeow_instances 1\nwhatsmeow_connected_instances 1'},
 {g:'system',m:'GET',p:'/webhook/config',s:'Ler webhook global',a:'Bearer',d:'Retorna a integração global no formato WhatsApp Cloud API.',r:{url:'https://api.exemplo.com/webhooks/whatsapp',enabled:true,verifyToken:'***'}},
 {g:'system',m:'POST',p:'/webhook/config',s:'Configurar webhook global',a:'Bearer',d:'Salva e tenta verificar remotamente a configuração global.',b:{url:'https://api.exemplo.com/webhooks/whatsapp',verifyToken:'token-de-verificacao',appSecret:'segredo-assinatura',enabled:true},r:{ok:true,verified:true}},

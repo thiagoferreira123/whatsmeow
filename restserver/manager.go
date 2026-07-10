@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,6 +71,8 @@ type Manager struct {
 
 	gwMu sync.RWMutex
 	gw   GlobalWebhook // single global webhook (WhatsApp Cloud API style)
+
+	runtimeActive atomic.Bool
 }
 
 func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waLog.Logger) *Manager {
@@ -94,8 +97,13 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 		jidCache:   make(map[string]jidCacheEntry),
 	}
 	m.loadGlobalWebhook()
+	m.runtimeActive.Store(true)
 	return m
 }
+
+func (m *Manager) SetRuntimeActive(active bool) { m.runtimeActive.Store(active) }
+
+func (m *Manager) RuntimeActive() bool { return m.runtimeActive.Load() }
 
 // connectWithLimit runs cli.Connect() holding a slot of the global connect
 // semaphore. Call from a goroutine; blocking here only delays other connects.

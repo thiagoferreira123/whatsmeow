@@ -35,6 +35,8 @@ type Config struct {
 	ResetCooldownSeconds      int  // minimum interval between controlled runtime resets
 	InstanceLogRetentionDays  int  // structured per-instance audit retention
 	InstanceLogCleanupMinutes int  // cleanup worker interval
+	RuntimeLeaseTTLSeconds    int  // singleton lease TTL shared by rolling containers
+	RuntimeLeaseRetrySeconds  int  // standby polling/heartbeat interval
 }
 
 func loadConfig() Config {
@@ -73,6 +75,8 @@ func loadConfig() Config {
 		ResetCooldownSeconds:      getenvInt("RESET_COOLDOWN_SECONDS", 60),
 		InstanceLogRetentionDays:  getenvInt("INSTANCE_LOG_RETENTION_DAYS", 7),
 		InstanceLogCleanupMinutes: getenvInt("INSTANCE_LOG_CLEANUP_INTERVAL_MINUTES", 60),
+		RuntimeLeaseTTLSeconds:    getenvInt("RUNTIME_LEASE_TTL_SECONDS", 30),
+		RuntimeLeaseRetrySeconds:  getenvInt("RUNTIME_LEASE_RETRY_SECONDS", 2),
 	}
 }
 

@@ -34,6 +34,7 @@ func testPolicyManager(t *testing.T, cfg Config) (*Manager, *Store) {
 		cfg:      cfg,
 		outbound: newOutboundGuard(cfg),
 	}
+	m.SetRuntimeActive(true)
 	return m, store
 }
 

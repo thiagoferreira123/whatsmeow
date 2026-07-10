@@ -35,6 +35,8 @@ ENV PORT=8080 \
     RESET_COOLDOWN_SECONDS=60 \
     INSTANCE_LOG_RETENTION_DAYS=7 \
     INSTANCE_LOG_CLEANUP_INTERVAL_MINUTES=60 \
+    RUNTIME_LEASE_TTL_SECONDS=30 \
+    RUNTIME_LEASE_RETRY_SECONDS=2 \
     WHATSMEOW_DSN="file:/data/whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 EXPOSE 8080
 VOLUME ["/data"]

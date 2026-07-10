@@ -1,11 +1,53 @@
 package main
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
+	waLog "go.mau.fi/whatsmeow/util/log"
+	_ "modernc.org/sqlite"
 )
+
+func TestLoadAllKeepsHundredsOfInstancesInOneRuntime(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:scale-500?mode=memory&cache=shared&_pragma=foreign_keys(on)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(8)
+	t.Cleanup(func() { _ = db.Close() })
+
+	container := sqlstore.NewWithDB(db, "sqlite3", waLog.Noop)
+	if err := container.Upgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 500; i++ {
+		now := nowRFC()
+		instance := Instance{
+			ID: fmt.Sprintf("instance-%03d", i), Name: fmt.Sprintf("professional-%03d", i),
+			Token: fmt.Sprintf("token-%03d", i), CreatedAt: now, UpdatedAt: now,
+		}
+		if err := store.Create(&instance); err != nil {
+			t.Fatalf("create instance %d: %v", i, err)
+		}
+	}
+
+	mgr := NewManager(container, store, Config{ConnectConcurrency: 8}, waLog.Noop)
+	if err := mgr.LoadAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(mgr.runtimes); got != 500 {
+		t.Fatalf("loaded runtimes = %d, want 500", got)
+	}
+}
 
 func TestReconnectBackoffGrowsAndCaps(t *testing.T) {
 	// fails=0 → ~30s (24-36s with ±20% jitter)
