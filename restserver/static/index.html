@@ -34,12 +34,15 @@
   .logout:hover{color:var(--text);border-color:#42535e}
   main{width:min(1040px,calc(100% - 32px));margin:28px auto 64px}
   .panel{overflow:hidden;background:var(--panel);border:1px solid var(--line);border-radius:14px}
-  .panel-title{display:flex;align-items:center;padding:18px 20px;border-bottom:1px solid var(--line)}
+  .panel-title{display:flex;align-items:center;gap:8px;padding:18px 20px;border-bottom:1px solid var(--line)}
   .panel-title h2{margin:0;font-size:14px;font-weight:650}
   .panel-title span{margin-left:8px;color:var(--muted);font-size:12px}
+  .search{width:min(280px,42vw);margin-left:auto;padding:9px 12px;color:var(--text);background:#1d2a32;border:1px solid var(--line);border-radius:8px;outline:none}
+  .search:focus{border-color:var(--green)}
   table{width:100%;border-collapse:collapse}
   th{padding:11px 16px;text-align:left;color:var(--muted);font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.55px}
   td{padding:15px 16px;border-top:1px solid var(--line);font-size:14px;vertical-align:middle}
+  tbody tr[data-instance]{cursor:pointer}
   tbody tr:hover{background:var(--panel-hover)}
   .instance-name{font-weight:650}
   .instance-id{margin-top:4px;color:var(--muted);font:11px ui-monospace,SFMono-Regular,Consolas,monospace}
@@ -70,11 +73,34 @@
   .login input:focus{border-color:var(--green)}
   .login button{width:100%;margin-top:12px;padding:11px;background:var(--green);color:#062b16}
   .login-error{min-height:18px;margin-top:10px;color:var(--red);font-size:12px}
+  .log-overlay{position:fixed;inset:0;z-index:15;background:rgba(0,0,0,.58);display:flex;justify-content:flex-end}
+  .log-overlay.hidden{display:none}
+  .log-drawer{width:min(620px,100%);height:100%;display:flex;flex-direction:column;background:var(--bg);border-left:1px solid var(--line);box-shadow:-16px 0 40px rgba(0,0,0,.28)}
+  .log-header{display:flex;align-items:center;gap:12px;padding:18px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .log-header h2{margin:0;font-size:16px}
+  .log-header p{margin:3px 0 0;color:var(--muted);font-size:12px}
+  .close{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--text)}
+  .log-filters{display:flex;gap:8px;padding:12px 20px;border-bottom:1px solid var(--line)}
+  .log-filters button{background:#1d2a32;color:var(--muted);border:1px solid var(--line)}
+  .log-filters button.active{color:var(--green);border-color:rgba(37,211,102,.45);background:var(--green-soft)}
+  .log-list{flex:1;overflow:auto;padding:18px 20px}
+  .log-item{position:relative;margin-left:8px;padding:0 0 22px 22px;border-left:1px solid var(--line)}
+  .log-item:last-child{border-left-color:transparent}
+  .log-dot{position:absolute;left:-5px;top:3px;width:9px;height:9px;border-radius:50%;background:var(--green)}
+  .log-item.warning .log-dot{background:var(--yellow)}
+  .log-item.error .log-dot{background:var(--red)}
+  .log-top{display:flex;align-items:center;gap:8px}
+  .log-event{font-size:13px;font-weight:700}
+  .log-time{margin-left:auto;color:var(--muted);font-size:11px}
+  .log-reason{margin-top:6px;color:#c5cdd2;font-size:12px;line-height:1.45}
+  .log-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+  .log-meta span{padding:3px 7px;border-radius:6px;background:#1d2a32;color:var(--muted);font:10px ui-monospace,SFMono-Regular,Consolas,monospace}
   @media(max-width:760px){
     header{padding:0 16px}
     main{width:min(100% - 20px,1040px);margin-top:18px}
     .panel{overflow-x:auto}
     table{min-width:720px}
+    .panel-title{position:sticky;left:0;min-width:calc(100vw - 20px)}
   }
 </style>
 </head>
@@ -92,6 +118,7 @@
     <div class="panel-title">
       <h2>Instâncias criadas</h2>
       <span id="total"></span>
+      <input class="search" id="search" type="search" placeholder="Buscar pelo nome…" autocomplete="off" />
     </div>
     <table>
       <thead>
@@ -110,6 +137,23 @@
   </section>
 </main>
 
+<div class="log-overlay hidden" id="logOverlay">
+  <aside class="log-drawer" aria-label="Histórico da instância">
+    <div class="log-header">
+      <div><h2 id="logTitle">Histórico</h2><p>Eventos mantidos por até <span id="retentionDays">7</span> dias</p></div>
+      <button class="close" id="closeLogs">Fechar</button>
+    </div>
+    <div class="log-filters" id="logFilters">
+      <button class="active" data-category="">Todos</button>
+      <button data-category="connection">Conexão</button>
+      <button data-category="send">Envios</button>
+      <button data-category="queue">Fila</button>
+      <button data-category="system">Sistema</button>
+    </div>
+    <div class="log-list" id="logList"><div class="empty">Carregando…</div></div>
+  </aside>
+</div>
+
 <div class="overlay" id="loginOverlay">
   <form class="login" id="loginForm">
     <div class="logo">W</div>
@@ -126,6 +170,10 @@ const $ = selector => document.querySelector(selector);
 const storageKey = 'wmKey';
 let apiKey = '';
 let started = false;
+let instancesCache = [];
+let activeInstance = null;
+let activeCategory = '';
+let logTimer = null;
 
 function escapeHTML(value){
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -196,29 +244,96 @@ function profileHTML(instance){
 async function loadInstances(){
   try{
     const instances = await request('/instances') || [];
+    instancesCache = instances;
     $('#health').classList.add('ok');
     $('#total').textContent = instances.length === 1 ? '1 instância' : `${instances.length} instâncias`;
-    if(!instances.length){
-      $('#rows').innerHTML = '<tr><td colspan="5" class="empty">Nenhuma instância criada.</td></tr>';
-      return;
-    }
-    $('#rows').innerHTML = instances.map(instance => `
-      <tr>
-        <td><div class="instance-name">${escapeHTML(instance.name)}</div><div class="instance-id">${escapeHTML(instance.id)}</div></td>
-        <td><span class="badge ${escapeHTML(instance.status || 'disconnected')}">${statusLabel(instance.status)}</span></td>
-        <td>${profileHTML(instance)}</td>
-        <td class="date">${formatDate(instance.createdAt)}</td>
-        <td class="actions"><button class="remove" data-remove="${escapeHTML(instance.id)}" data-name="${escapeHTML(instance.name)}">Remover</button></td>
-      </tr>`).join('');
+    renderInstances();
   }catch(error){
     $('#health').classList.remove('ok');
     if(error.message !== 'Não autorizado') $('#rows').innerHTML = `<tr><td colspan="5" class="error">${escapeHTML(error.message)}</td></tr>`;
   }
 }
 
+function renderInstances(){
+    const term = $('#search').value.trim().toLocaleLowerCase('pt-BR');
+    const instances = instancesCache.filter(instance => String(instance.name || '').toLocaleLowerCase('pt-BR').includes(term));
+    if(!instances.length){
+      $('#rows').innerHTML = '<tr><td colspan="5" class="empty">Nenhuma instância criada.</td></tr>';
+      return;
+    }
+    $('#rows').innerHTML = instances.map(instance => `
+      <tr data-instance="${escapeHTML(instance.id)}">
+        <td><div class="instance-name">${escapeHTML(instance.name)}</div><div class="instance-id">${escapeHTML(instance.id)}</div></td>
+        <td><span class="badge ${escapeHTML(instance.status || 'disconnected')}">${statusLabel(instance.status)}</span></td>
+        <td>${profileHTML(instance)}</td>
+        <td class="date">${formatDate(instance.createdAt)}</td>
+        <td class="actions"><button class="remove" data-remove="${escapeHTML(instance.id)}" data-name="${escapeHTML(instance.name)}">Remover</button></td>
+      </tr>`).join('');
+}
+
+const eventLabels = {
+  instance_created:'Instância criada', pairing_started:'Pareamento iniciado', qr_generated:'QR Code gerado', paired:'Pareamento concluído',
+  connect_attempt:'Tentativa de conexão', connect_started:'Conexão iniciada', connected:'Conectada', connect_attempt_failed:'Falha ao conectar',
+  connect_failure:'Conexão rejeitada', socket_disconnected:'Socket desconectado', logged_out:'Sessão encerrada', stream_replaced:'Sessão substituída',
+  temporary_ban:'Banimento temporário', client_outdated:'Cliente desatualizado', keepalive_timeout:'Keepalive sem resposta',
+  keepalive_restored:'Keepalive restaurado', hibernated:'Instância pausada', resume_requested:'Retomada solicitada', runtime_reset:'Runtime reiniciado',
+  send_attempt:'Tentativa de envio', send_success:'Mensagem enviada', send_failed:'Falha no envio', message_enqueued:'Mensagem enfileirada',
+  waiting_connection:'Aguardando conexão', queue_completed:'Envio da fila concluído', queue_failed:'Falha definitiva na fila', retry_scheduled:'Nova tentativa agendada'
+};
+
+function renderLogs(logs){
+  if(!logs.length){ $('#logList').innerHTML='<div class="empty">Nenhum evento registrado.</div>'; return; }
+  $('#logList').innerHTML = logs.map(log => {
+    const meta = [log.status, log.source, log.recipient && `destino ${log.recipient}`, log.messageType, log.messageId && `msg ${log.messageId}`, log.queueJobId && `job ${log.queueJobId}`].filter(Boolean);
+    return `<div class="log-item ${escapeHTML(log.level)}"><span class="log-dot"></span><div class="log-top"><span class="log-event">${escapeHTML(eventLabels[log.event] || log.event)}</span><span class="log-time">${formatDate(log.createdAt)}</span></div>${log.reason ? `<div class="log-reason">${escapeHTML(log.reason)}</div>` : ''}${meta.length ? `<div class="log-meta">${meta.map(value=>`<span>${escapeHTML(value)}</span>`).join('')}</div>` : ''}</div>`;
+  }).join('');
+}
+
+async function loadLogs(){
+  if(!activeInstance) return;
+  try{
+    const query = new URLSearchParams({limit:'200'});
+    if(activeCategory) query.set('category', activeCategory);
+    const result = await request(`/instances/${encodeURIComponent(activeInstance.id)}/logs?${query}`);
+    $('#retentionDays').textContent = result.retentionDays || 7;
+    renderLogs(result.logs || []);
+  }catch(error){ if(error.message !== 'Não autorizado') $('#logList').innerHTML=`<div class="error">${escapeHTML(error.message)}</div>`; }
+}
+
+function openLogs(instance){
+  activeInstance = instance;
+  activeCategory = '';
+  $('#logTitle').textContent = instance.name || 'Histórico';
+  $('#logFilters').querySelectorAll('button').forEach(button=>button.classList.toggle('active', !button.dataset.category));
+  $('#logOverlay').classList.remove('hidden');
+  $('#logList').innerHTML='<div class="empty">Carregando…</div>';
+  loadLogs();
+  clearInterval(logTimer);
+  logTimer = setInterval(loadLogs, 5000);
+}
+
+function closeLogs(){
+  clearInterval(logTimer); logTimer=null; activeInstance=null;
+  $('#logOverlay').classList.add('hidden');
+}
+
+$('#search').addEventListener('input', renderInstances);
+$('#closeLogs').addEventListener('click', closeLogs);
+$('#logOverlay').addEventListener('click', event=>{ if(event.target === $('#logOverlay')) closeLogs(); });
+$('#logFilters').addEventListener('click', event=>{
+  const button=event.target.closest('[data-category]'); if(!button) return;
+  activeCategory=button.dataset.category;
+  $('#logFilters').querySelectorAll('button').forEach(item=>item.classList.toggle('active', item===button));
+  $('#logList').innerHTML='<div class="empty">Carregando…</div>'; loadLogs();
+});
+
 $('#rows').addEventListener('click', async event => {
   const button = event.target.closest('[data-remove]');
-  if(!button) return;
+  if(!button){
+    const row=event.target.closest('[data-instance]');
+    if(row){ const instance=instancesCache.find(item=>item.id===row.dataset.instance); if(instance) openLogs(instance); }
+    return;
+  }
   const name = button.dataset.name || 'esta instância';
   if(!confirm(`Remover ${name}? A sessão do WhatsApp também será desconectada.`)) return;
   button.disabled = true;

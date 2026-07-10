@@ -81,7 +81,29 @@ CREATE TABLE IF NOT EXISTS outbound_activity (
 );
 CREATE INDEX IF NOT EXISTS outbound_activity_recipient_time
 	ON outbound_activity(instance_id, recipient, sent_at);
-CREATE INDEX IF NOT EXISTS outbound_activity_time ON outbound_activity(sent_at);`
+CREATE INDEX IF NOT EXISTS outbound_activity_time ON outbound_activity(sent_at);
+
+CREATE TABLE IF NOT EXISTS instance_logs (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	instance_id  TEXT NOT NULL,
+	category     TEXT NOT NULL,
+	event        TEXT NOT NULL,
+	level        TEXT NOT NULL DEFAULT 'info',
+	status       TEXT NOT NULL DEFAULT '',
+	source       TEXT NOT NULL DEFAULT '',
+	recipient    TEXT NOT NULL DEFAULT '',
+	message_type TEXT NOT NULL DEFAULT '',
+	message_id   TEXT NOT NULL DEFAULT '',
+	queue_job_id TEXT NOT NULL DEFAULT '',
+	reason       TEXT NOT NULL DEFAULT '',
+	details_json TEXT NOT NULL DEFAULT '{}',
+	created_at   TEXT NOT NULL,
+	FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS instance_logs_instance_time
+	ON instance_logs(instance_id, id DESC);
+CREATE INDEX IF NOT EXISTS instance_logs_created_at
+	ON instance_logs(created_at);`
 
 const queueSchemaSQL = `
 CREATE TABLE IF NOT EXISTS outbound_queue (

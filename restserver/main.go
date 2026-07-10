@@ -53,6 +53,7 @@ func main() {
 		log.Printf("warning: failed to load existing instances: %v", err)
 	}
 	mgr.StartQueueWorkers()
+	mgr.StartLogCleanup()
 	mgr.StartWatchdog(time.Duration(cfg.WatchdogSeconds) * time.Second)
 
 	handlers := NewHandlers(mgr, cfg)

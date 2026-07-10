@@ -250,14 +250,14 @@ func (h *Handlers) uzSendText(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			key = r.Header.Get("Idempotency-Key")
 		}
-		job, created, err := h.mgr.EnqueueText(in.ID, body.Number, body.Text, key)
+		job, created, err := h.mgr.EnqueueTextFrom(in.ID, body.Number, body.Text, key, "uazapi_compat")
 		if handleErr(w, err) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
-	id, err := h.mgr.SendText(r.Context(), in.ID, body.Number, body.Text)
+	id, err := h.mgr.SendText(withSendAudit(r.Context(), "uazapi_compat", ""), in.ID, body.Number, body.Text)
 	if handleErr(w, err) {
 		return
 	}
@@ -286,16 +286,16 @@ func (h *Handlers) uzSendMedia(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			key = r.Header.Get("Idempotency-Key")
 		}
-		job, created, err := h.mgr.EnqueueMedia(in.ID, queuedMediaPayload{
+		job, created, err := h.mgr.EnqueueMediaFrom(in.ID, queuedMediaPayload{
 			Number: body.Number, Type: body.Type, File: body.File, Text: body.Text, FileName: body.DocName,
-		}, key)
+		}, key, "uazapi_compat")
 		if handleErr(w, err) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
-	id, err := h.mgr.SendMedia(r.Context(), in.ID, body.Number, body.Type, body.File, body.Text, body.DocName)
+	id, err := h.mgr.SendMedia(withSendAudit(r.Context(), "uazapi_compat", ""), in.ID, body.Number, body.Type, body.File, body.Text, body.DocName)
 	if handleErr(w, err) {
 		return
 	}

@@ -46,6 +46,8 @@ diretório de execução).
 | `QUEUE_MAX_ATTEMPTS` | `5` | tentativas máximas para falhas transitórias |
 | `QUEUE_RETRY_MAX_SECONDS` | `300` | teto do backoff exponencial da fila |
 | `RESET_COOLDOWN_SECONDS` | `60` | intervalo mínimo entre resets controlados da mesma instância |
+| `INSTANCE_LOG_RETENTION_DAYS` | `7` | retenção máxima do histórico estruturado por instância |
+| `INSTANCE_LOG_CLEANUP_INTERVAL_MINUTES` | `60` | intervalo da limpeza automática de logs expirados |
 
 ## Endpoints
 
@@ -64,6 +66,7 @@ diretório de execução).
 | `POST /instances/{id}/send/media` | **JSON:** `{number, type?, file:URL\|base64\|dataURI, text?, fileName?, async?, idempotencyKey?}` · **ou upload:** `multipart/form-data` | síncrono `200` ou JSON enfileirado `202` |
 | `GET /instances/{id}/queue` | query `status?`, `limit?` | resumo, jobs e prontidão da sessão |
 | `DELETE /instances/{id}/queue` | — | cancela jobs ainda pendentes |
+| `GET /instances/{id}/logs` | query `limit?`, `before?`, `category?`, `level?` | histórico paginado de conexão, envios, fila e sistema |
 | `POST /instances/{id}/reset` | — | reset controlado do runtime sem apagar credenciais |
 | `POST /instances/{id}/hibernate` | — | pausa socket e preserva credenciais/fila |
 | `POST /instances/{id}/resume` | — | retoma sessão hibernada ou em conflito |
@@ -72,6 +75,10 @@ diretório de execução).
 | `POST /instances/{id}/consents/revoke` | `{number, source?}` | revoga e bloqueia novos envios |
 | `POST /instances/{id}/webhook` | `{url, secret?, events?, enabled?}` | `{ok:true}` |
 | `POST /instances/{id}/disconnect` | — | alias legado de hibernação (`204`) |
+
+O histórico por instância não armazena texto integral, arquivos, base64, tokens ou
+segredos. A exclusão da instância remove seus logs em cascata. A limpeza periódica
+mantém no máximo os dias configurados em `INSTANCE_LOG_RETENTION_DAYS`.
 
 `status` ∈ `disconnected | connecting | connected | hibernated`. `number` aceita telefone (`5511999998888`,
 com ou sem formatação) ou JID completo (`...@s.whatsapp.net`). O número é **resolvido via

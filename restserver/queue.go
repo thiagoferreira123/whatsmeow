@@ -243,6 +243,10 @@ func (s *Store) ListQueue(instanceID, status string, limit int) ([]QueueJob, err
 }
 
 func (m *Manager) EnqueueText(instanceID, number, text, key string) (QueueJob, bool, error) {
+	return m.EnqueueTextFrom(instanceID, number, text, key, "api")
+}
+
+func (m *Manager) EnqueueTextFrom(instanceID, number, text, key, source string) (QueueJob, bool, error) {
 	if m.get(instanceID) == nil {
 		return QueueJob{}, false, errNotFound
 	}
@@ -252,11 +256,18 @@ func (m *Manager) EnqueueText(instanceID, number, text, key string) (QueueJob, b
 	job, created, err := m.store.Enqueue(instanceID, key, "text", queuedTextPayload{Number: number, Text: text}, m.cfg.QueueMaxAttempts)
 	if created {
 		m.stats.queueEnqueued.Add(1)
+		m.auditInstance(instanceID, logCategoryQueue, "message_enqueued", "info", InstanceLog{
+			Status: queueQueued, Source: source, Recipient: permissionKey(number), MessageType: "text", QueueJobID: job.ID,
+		})
 	}
 	return job, created, err
 }
 
 func (m *Manager) EnqueueMedia(instanceID string, payload queuedMediaPayload, key string) (QueueJob, bool, error) {
+	return m.EnqueueMediaFrom(instanceID, payload, key, "api")
+}
+
+func (m *Manager) EnqueueMediaFrom(instanceID string, payload queuedMediaPayload, key, source string) (QueueJob, bool, error) {
 	if m.get(instanceID) == nil {
 		return QueueJob{}, false, errNotFound
 	}
@@ -266,6 +277,13 @@ func (m *Manager) EnqueueMedia(instanceID string, payload queuedMediaPayload, ke
 	job, created, err := m.store.Enqueue(instanceID, key, "media", payload, m.cfg.QueueMaxAttempts)
 	if created {
 		m.stats.queueEnqueued.Add(1)
+		messageType := payload.Type
+		if messageType == "" {
+			messageType = "media"
+		}
+		m.auditInstance(instanceID, logCategoryQueue, "message_enqueued", "info", InstanceLog{
+			Status: queueQueued, Source: source, Recipient: permissionKey(payload.Number), MessageType: messageType, QueueJobID: job.ID,
+		})
 	}
 	return job, created, err
 }
@@ -329,6 +347,12 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 	rt.mu.RUnlock()
 	if cli == nil || !cli.IsLoggedIn() || !cli.IsConnected() || paused {
 		_, _ = m.store.DeferQueue(job, queueWaitingConnection, "session is not ready", time.Now().Add(10*time.Second), false)
+		if job.LastError != "session is not ready" {
+			m.auditInstance(job.InstanceID, logCategoryQueue, "waiting_connection", "warning", InstanceLog{
+				Status: queueWaitingConnection, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID,
+				Reason: "session is not ready",
+			})
+		}
 		return
 	}
 	var messageID string
@@ -337,12 +361,12 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 	case "text":
 		var payload queuedTextPayload
 		if err = json.Unmarshal([]byte(job.PayloadJSON), &payload); err == nil {
-			messageID, err = m.SendText(ctx, job.InstanceID, payload.Number, payload.Text)
+			messageID, err = m.SendText(withSendAudit(ctx, "queue", job.ID), job.InstanceID, payload.Number, payload.Text)
 		}
 	case "media":
 		var payload queuedMediaPayload
 		if err = json.Unmarshal([]byte(job.PayloadJSON), &payload); err == nil {
-			messageID, err = m.SendMedia(ctx, job.InstanceID, payload.Number, payload.Type, payload.File, payload.Text, payload.FileName)
+			messageID, err = m.SendMedia(withSendAudit(ctx, "queue", job.ID), job.InstanceID, payload.Number, payload.Type, payload.File, payload.Text, payload.FileName)
 		}
 	default:
 		err = fmt.Errorf("unsupported queue kind %q", job.Kind)
@@ -350,6 +374,9 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 	if err == nil {
 		_ = m.store.FinishQueue(job.ID, messageID, time.Now())
 		m.stats.queueSent.Add(1)
+		m.auditInstance(job.InstanceID, logCategoryQueue, "queue_completed", "info", InstanceLog{
+			Status: queueSent, Source: "queue", MessageType: job.Kind, MessageID: messageID, QueueJobID: job.ID,
+		})
 		return
 	}
 	m.stats.queueErrors.Add(1)
@@ -366,9 +393,16 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 				wait = 10 * time.Second
 			}
 			_, _ = m.store.DeferQueue(job, queueQueued, err.Error(), time.Now().Add(wait), false)
+			m.auditInstance(job.InstanceID, logCategoryQueue, "retry_scheduled", "warning", InstanceLog{
+				Status: queueQueued, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+				Details: map[string]any{"nextAttemptInSeconds": int(wait.Seconds()), "rateLimited": true},
+			})
 			return
 		case ae.Status >= 400 && ae.Status < 500:
 			_ = m.store.FailQueue(job.ID, err.Error(), time.Now())
+			m.auditInstance(job.InstanceID, logCategoryQueue, "queue_failed", "error", InstanceLog{
+				Status: queueFailed, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+			})
 			return
 		}
 	}
@@ -379,5 +413,14 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 	terminal, _ := m.store.DeferQueue(job, queueQueued, err.Error(), time.Now().Add(time.Duration(seconds)*time.Second), true)
 	if terminal {
 		m.log.Warnf("queue job %s failed permanently after %d attempts: %v", job.ID, job.MaxAttempts, err)
+		m.auditInstance(job.InstanceID, logCategoryQueue, "queue_failed", "error", InstanceLog{
+			Status: queueFailed, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+			Details: map[string]any{"attempts": job.MaxAttempts},
+		})
+	} else {
+		m.auditInstance(job.InstanceID, logCategoryQueue, "retry_scheduled", "warning", InstanceLog{
+			Status: queueQueued, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+			Details: map[string]any{"nextAttemptInSeconds": int(seconds), "attempt": job.Attempts + 1},
+		})
 	}
 }

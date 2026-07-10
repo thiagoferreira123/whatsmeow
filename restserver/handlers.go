@@ -24,7 +24,7 @@ type Handlers struct {
 	cfg Config
 }
 
-const serviceVersion = "resilience-v2"
+const serviceVersion = "audit-v3"
 
 func NewHandlers(mgr *Manager, cfg Config) *Handlers {
 	return &Handlers{mgr: mgr, cfg: cfg}
@@ -75,6 +75,7 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("POST /instances/{id}/reset", h.resetRuntime)
 	mux.HandleFunc("GET /instances/{id}/queue", h.getQueue)
 	mux.HandleFunc("DELETE /instances/{id}/queue", h.clearQueue)
+	mux.HandleFunc("GET /instances/{id}/logs", h.getInstanceLogs)
 
 	// uazapi wire-compat layer (header auth admintoken/token; see uazapi_compat.go).
 	h.registerUazapiCompat(mux)
@@ -263,14 +264,14 @@ func (h *Handlers) sendText(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			key = r.Header.Get("Idempotency-Key")
 		}
-		job, created, err := h.mgr.EnqueueText(r.PathValue("id"), body.Number, body.Text, key)
+		job, created, err := h.mgr.EnqueueTextFrom(r.PathValue("id"), body.Number, body.Text, key, "native_api")
 		if handleErr(w, err) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
-	id, err := h.mgr.SendText(r.Context(), r.PathValue("id"), body.Number, body.Text)
+	id, err := h.mgr.SendText(withSendAudit(r.Context(), "native_api", ""), r.PathValue("id"), body.Number, body.Text)
 	if handleErr(w, err) {
 		return
 	}
@@ -305,16 +306,16 @@ func (h *Handlers) sendMedia(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			key = r.Header.Get("Idempotency-Key")
 		}
-		job, created, err := h.mgr.EnqueueMedia(r.PathValue("id"), queuedMediaPayload{
+		job, created, err := h.mgr.EnqueueMediaFrom(r.PathValue("id"), queuedMediaPayload{
 			Number: body.Number, Type: body.Type, File: body.File, Text: body.Text, FileName: body.FileName,
-		}, key)
+		}, key, "native_api")
 		if handleErr(w, err) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "created": created})
 		return
 	}
-	id, err := h.mgr.SendMedia(r.Context(), r.PathValue("id"), body.Number, body.Type, body.File, body.Text, body.FileName)
+	id, err := h.mgr.SendMedia(withSendAudit(r.Context(), "native_api", ""), r.PathValue("id"), body.Number, body.Type, body.File, body.Text, body.FileName)
 	if handleErr(w, err) {
 		return
 	}
@@ -354,7 +355,7 @@ func (h *Handlers) sendMediaUpload(w http.ResponseWriter, r *http.Request) {
 	if header != nil {
 		mime = header.Header.Get("Content-Type")
 	}
-	id, err := h.mgr.SendMediaBytes(r.Context(), r.PathValue("id"), number, r.FormValue("type"), data, mime, r.FormValue("text"), fileName)
+	id, err := h.mgr.SendMediaBytes(withSendAudit(r.Context(), "native_api", ""), r.PathValue("id"), number, r.FormValue("type"), data, mime, r.FormValue("text"), fileName)
 	if handleErr(w, err) {
 		return
 	}
@@ -484,7 +485,43 @@ func (h *Handlers) clearQueue(w http.ResponseWriter, r *http.Request) {
 	if handleErr(w, err) {
 		return
 	}
+	h.mgr.auditInstance(id, logCategoryQueue, "queue_canceled", "warning", InstanceLog{
+		Status: queueCanceled, Source: "operator", Details: map[string]any{"canceled": canceled},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"canceled": canceled})
+}
+
+func (h *Handlers) getInstanceLogs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if h.mgr.get(id) == nil {
+		handleErr(w, errNotFound)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	level := strings.TrimSpace(r.URL.Query().Get("level"))
+	if category != "" && category != logCategoryConnection && category != logCategorySend && category != logCategoryQueue && category != logCategorySystem {
+		writeErr(w, http.StatusBadRequest, "invalid log category")
+		return
+	}
+	if level != "" && level != "info" && level != "warning" && level != "error" {
+		writeErr(w, http.StatusBadRequest, "invalid log level")
+		return
+	}
+	logs, err := h.mgr.store.ListInstanceLogs(id, InstanceLogQuery{
+		BeforeID: before, Limit: limit, Category: category, Level: level,
+	})
+	if handleErr(w, err) {
+		return
+	}
+	var nextBefore int64
+	if len(logs) > 0 {
+		nextBefore = logs[len(logs)-1].ID
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"logs": logs, "nextBefore": nextBefore, "retentionDays": h.cfg.InstanceLogRetentionDays,
+	})
 }
 
 func (h *Handlers) metrics(w http.ResponseWriter, r *http.Request) {

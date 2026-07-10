@@ -57,11 +57,13 @@ type Manager struct {
 
 	// connectSem bounds simultaneous Connect() attempts (boot + watchdog) so
 	// hundreds of instances don't storm WhatsApp/CPU/SQLite at the same time.
-	connectSem  chan struct{}
-	sendSem     chan struct{}
-	queueCancel context.CancelFunc
-	queueWG     sync.WaitGroup
-	stats       managerStats
+	connectSem       chan struct{}
+	sendSem          chan struct{}
+	queueCancel      context.CancelFunc
+	queueWG          sync.WaitGroup
+	logCleanupCancel context.CancelFunc
+	logCleanupWG     sync.WaitGroup
+	stats            managerStats
 
 	jidMu    sync.Mutex
 	jidCache map[string]jidCacheEntry // instanceID|digits -> resolved JID (TTL)
@@ -103,6 +105,10 @@ func (m *Manager) connectWithLimit(rt *instanceRuntime, cli *whatsmeow.Client, r
 	if cli.IsConnected() {
 		return
 	}
+	instanceID := rt.metaCopy().ID
+	m.auditInstance(instanceID, logCategoryConnection, "connect_attempt", "info", InstanceLog{
+		Status: "connecting", Source: reason,
+	})
 	m.stats.connectAttempts.Add(1)
 	if err := cli.Connect(); err != nil && !errors.Is(err, whatsmeow.ErrAlreadyConnected) {
 		m.stats.connectFailures.Add(1)
@@ -110,8 +116,14 @@ func (m *Manager) connectWithLimit(rt *instanceRuntime, cli *whatsmeow.Client, r
 		rt.resetting = false
 		rt.mu.Unlock()
 		m.log.Warnf("%s: connect %s failed: %v", reason, rt.meta.ID, err)
+		m.auditInstance(instanceID, logCategoryConnection, "connect_attempt_failed", "error", InstanceLog{
+			Status: "disconnected", Source: reason, Reason: err.Error(),
+		})
 	} else {
 		m.log.Infof("%s: connecting %s", reason, rt.meta.ID)
+		m.auditInstance(instanceID, logCategoryConnection, "connect_started", "info", InstanceLog{
+			Status: "connecting", Source: reason,
+		})
 	}
 }
 
@@ -234,6 +246,9 @@ func (m *Manager) Shutdown() {
 	if m.queueCancel != nil {
 		m.queueCancel()
 	}
+	if m.logCleanupCancel != nil {
+		m.logCleanupCancel()
+	}
 	m.mu.RLock()
 	rts := make([]*instanceRuntime, 0, len(m.runtimes))
 	for _, rt := range m.runtimes {
@@ -257,6 +272,7 @@ func (m *Manager) Shutdown() {
 	}
 	wg.Wait()
 	m.queueWG.Wait()
+	m.logCleanupWG.Wait()
 }
 
 // Create registers a new instance (no pairing yet — call GetQR to pair).
@@ -283,6 +299,9 @@ func (m *Manager) Create(name, adminField01, webhookURL, webhookSecret string) (
 	m.mu.Lock()
 	m.runtimes[in.ID] = rt
 	m.mu.Unlock()
+	m.auditInstance(in.ID, logCategorySystem, "instance_created", "info", InstanceLog{
+		Status: in.Status, Source: "api", Details: map[string]any{"name": in.Name},
+	})
 	return in, nil
 }
 
@@ -435,6 +454,9 @@ func (m *Manager) qrCode(id string) (code string, expires time.Time, status stri
 		}
 		rt.qrRunning = true
 		rt.qrCancel = cancel
+		m.auditInstance(id, logCategoryConnection, "pairing_started", "info", InstanceLog{
+			Status: "connecting", Source: "qr",
+		})
 		go m.consumeQR(rt, qrChan)
 	}
 	rt.mu.Unlock()
@@ -460,6 +482,9 @@ func (m *Manager) consumeQR(rt *instanceRuntime, ch <-chan whatsmeow.QRChannelIt
 			rt.qrCode = evt.Code
 			rt.qrExpiresAt = time.Now().Add(evt.Timeout)
 			rt.mu.Unlock()
+			m.auditInstance(rt.metaCopy().ID, logCategoryConnection, "qr_generated", "info", InstanceLog{
+				Status: "connecting", Source: "qr", Details: map[string]any{"expiresInSeconds": int(evt.Timeout.Seconds())},
+			})
 		} else { // success / timeout / error
 			rt.mu.Lock()
 			rt.qrCode = ""
@@ -489,7 +514,13 @@ func (m *Manager) Disconnect(id string) error {
 	in := rt.meta
 	rt.mu.Unlock()
 	rt.client.Disconnect()
-	return m.store.Save(&in)
+	if err := m.store.Save(&in); err != nil {
+		return err
+	}
+	m.auditInstance(id, logCategoryConnection, "hibernated", "warning", InstanceLog{
+		Status: "hibernated", Source: "operator", Reason: "socket disconnected intentionally",
+	})
+	return nil
 }
 
 // Resume brings back a hibernated or conflict-paused session without a new QR.
@@ -513,6 +544,9 @@ func (m *Manager) Resume(id string) error {
 	if err := m.store.Save(&in); err != nil {
 		return err
 	}
+	m.auditInstance(id, logCategoryConnection, "resume_requested", "info", InstanceLog{
+		Status: "connecting", Source: "operator",
+	})
 	go m.connectWithLimit(rt, cli, "resume")
 	return nil
 }
@@ -566,6 +600,9 @@ func (m *Manager) ResetRuntime(id string) (map[string]any, error) {
 	cli.Disconnect()
 	recovered, qerr := m.store.RecoverInstanceQueue(id)
 	m.stats.resets.Add(1)
+	m.auditInstance(id, logCategorySystem, "runtime_reset", "warning", InstanceLog{
+		Status: "connecting", Source: "operator", Details: map[string]any{"queuedRecovered": recovered, "queueRecoveryError": qerr != nil},
+	})
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		m.connectWithLimit(rt, cli, "runtime reset")
@@ -584,6 +621,7 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if rt == nil {
 		return errNotFound
 	}
+	m.auditInstance(id, logCategorySystem, "instance_delete_requested", "warning", InstanceLog{Source: "operator"})
 	cli := rt.client
 	if cli != nil {
 		rt.mu.Lock()
@@ -711,7 +749,11 @@ func (m *Manager) resolveRecipient(ctx context.Context, cli *whatsmeow.Client, n
 }
 
 // SendText sends a plain text message and returns the message id.
-func (m *Manager) SendText(ctx context.Context, id, number, text string) (string, error) {
+func (m *Manager) SendText(ctx context.Context, id, number, text string) (messageID string, sendErr error) {
+	audit := sendAuditFromContext(ctx)
+	recipientAudit := permissionKey(number)
+	m.auditSendAttempt(id, recipientAudit, "text", audit)
+	defer func() { m.auditSendResult(id, recipientAudit, "text", messageID, sendErr, audit) }()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -725,6 +767,7 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (string
 		return "", err
 	}
 	recipient := permissionKey(jid.User)
+	recipientAudit = recipient
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}
@@ -743,7 +786,11 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (string
 
 // sendTextJID sends a reply to an already-known chat while applying the same
 // outbound policy as REST-initiated messages.
-func (m *Manager) sendTextJID(ctx context.Context, id string, jid types.JID, text string) (string, error) {
+func (m *Manager) sendTextJID(ctx context.Context, id string, jid types.JID, text string) (messageID string, sendErr error) {
+	audit := sendAuditFromContext(ctx)
+	recipientAudit := permissionKey(jid.User)
+	m.auditSendAttempt(id, recipientAudit, "text", audit)
+	defer func() { m.auditSendResult(id, recipientAudit, "text", messageID, sendErr, audit) }()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -769,7 +816,14 @@ func (m *Manager) sendTextJID(ctx context.Context, id string, jid types.JID, tex
 }
 
 // SendMedia uploads and sends an image/video/audio/document message.
-func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, caption, fileName string) (string, error) {
+func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, caption, fileName string) (messageID string, sendErr error) {
+	audit := sendAuditFromContext(ctx)
+	if mediaType == "" {
+		mediaType = "media"
+	}
+	recipientAudit := permissionKey(number)
+	m.auditSendAttempt(id, recipientAudit, mediaType, audit)
+	defer func() { m.auditSendResult(id, recipientAudit, mediaType, messageID, sendErr, audit) }()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -783,6 +837,7 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 		return "", err
 	}
 	recipient := permissionKey(jid.User)
+	recipientAudit = recipient
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}
@@ -805,7 +860,14 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 }
 
 // SendMediaBytes sends an uploaded file (raw bytes) as media.
-func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType string, data []byte, mime, caption, fileName string) (string, error) {
+func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType string, data []byte, mime, caption, fileName string) (messageID string, sendErr error) {
+	audit := sendAuditFromContext(ctx)
+	if mediaType == "" {
+		mediaType = "media"
+	}
+	recipientAudit := permissionKey(number)
+	m.auditSendAttempt(id, recipientAudit, mediaType, audit)
+	defer func() { m.auditSendResult(id, recipientAudit, mediaType, messageID, sendErr, audit) }()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -819,6 +881,7 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 		return "", err
 	}
 	recipient := permissionKey(jid.User)
+	recipientAudit = recipient
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}

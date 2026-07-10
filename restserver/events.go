@@ -69,6 +69,12 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 			m.onClientOutdated(instanceID)
 		case *events.ConnectFailure:
 			m.onConnectFailure(instanceID, v)
+		case *events.KeepAliveTimeout:
+			m.onKeepAliveTimeout(instanceID, v)
+		case *events.KeepAliveRestored:
+			m.auditInstance(instanceID, logCategoryConnection, "keepalive_restored", "info", InstanceLog{
+				Status: "connected", Source: "whatsapp_socket",
+			})
 		}
 	}
 }
@@ -116,7 +122,8 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 			reply = m.cfg.AutoReplyCancel
 		}
 		go func(chat types.JID) {
-			if _, err := m.sendTextJID(context.Background(), instanceID, chat, reply); err != nil {
+			ctx := withSendAudit(context.Background(), "auto_reply", "")
+			if _, err := m.sendTextJID(ctx, instanceID, chat, reply); err != nil {
 				m.log.Warnf("instance %s: auto-reply blocked or failed: %v", instanceID, err)
 			}
 		}(v.Info.Chat)
@@ -217,6 +224,9 @@ func (m *Manager) onConnected(instanceID string) {
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "connected", "info", InstanceLog{
+		Status: "connected", Source: "whatsapp_event", Details: map[string]any{"owner": in.Owner, "profileName": in.ProfileName},
+	})
 	// Capture name / phone / profile photo in the background (needs the connection).
 	go m.captureOwnerProfile(context.Background(), instanceID)
 	gw := m.GetGlobalWebhook()
@@ -268,6 +278,9 @@ func (m *Manager) onPairSuccess(instanceID string, v *events.PairSuccess) {
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "paired", "info", InstanceLog{
+		Status: "connected", Source: "qr", Details: map[string]any{"owner": in.Owner, "businessName": v.BusinessName},
+	})
 }
 
 func (m *Manager) onLoggedOut(instanceID string, v *events.LoggedOut) {
@@ -283,6 +296,9 @@ func (m *Manager) onLoggedOut(instanceID string, v *events.LoggedOut) {
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "logged_out", "error", InstanceLog{
+		Status: "disconnected", Source: "whatsapp_event", Reason: in.LastDisconnectReason,
+	})
 	gw := m.GetGlobalWebhook()
 	if gw.Enabled && gw.URL != "" {
 		m.webhooks.deliverCloudAPI(gw.URL, gw.AppSecret, cloudAPIStatusPayload(in, "disconnected", in.LastDisconnectReason))
@@ -309,6 +325,9 @@ func (m *Manager) onStreamReplaced(instanceID string) {
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "stream_replaced", "error", InstanceLog{
+		Status: "disconnected", Source: "whatsapp_event", Reason: in.LastDisconnectReason,
+	})
 	gw := m.GetGlobalWebhook()
 	if gw.Enabled && gw.URL != "" {
 		m.webhooks.deliverCloudAPI(gw.URL, gw.AppSecret, cloudAPIStatusPayload(in, "disconnected", in.LastDisconnectReason))
@@ -338,6 +357,10 @@ func (m *Manager) onTemporaryBan(instanceID string, v *events.TemporaryBan) {
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "temporary_ban", "error", InstanceLog{
+		Status: "disconnected", Source: "whatsapp_event", Reason: in.LastDisconnectReason,
+		Details: map[string]any{"blockedUntil": in.SendingBlockedUntil, "expiresInSeconds": int(wait.Seconds())},
+	})
 	gw := m.GetGlobalWebhook()
 	if gw.Enabled && gw.URL != "" {
 		m.webhooks.deliverCloudAPI(gw.URL, gw.AppSecret, cloudAPIStatusPayload(in, "disconnected", in.LastDisconnectReason))
@@ -361,6 +384,9 @@ func (m *Manager) onClientOutdated(instanceID string) {
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "client_outdated", "error", InstanceLog{
+		Status: "disconnected", Source: "whatsapp_event", Reason: in.LastDisconnectReason,
+	})
 }
 
 // onConnectFailure records other server-side connect rejections so the panel
@@ -379,6 +405,17 @@ func (m *Manager) onConnectFailure(instanceID string, v *events.ConnectFailure) 
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "connect_failure", "error", InstanceLog{
+		Status: "disconnected", Source: "whatsapp_event", Reason: in.LastDisconnectReason,
+		Details: map[string]any{"code": int(v.Reason)},
+	})
+}
+
+func (m *Manager) onKeepAliveTimeout(instanceID string, v *events.KeepAliveTimeout) {
+	m.auditInstance(instanceID, logCategoryConnection, "keepalive_timeout", "warning", InstanceLog{
+		Status: "connected", Source: "whatsapp_socket", Reason: "keepalive responses stopped",
+		Details: map[string]any{"errorCount": v.ErrorCount, "lastSuccess": v.LastSuccess.UTC().Format(time.RFC3339)},
+	})
 }
 
 func (m *Manager) onDisconnected(instanceID string) {
@@ -393,4 +430,7 @@ func (m *Manager) onDisconnected(instanceID string) {
 		rt.meta.Status = "disconnected"
 	}
 	rt.mu.Unlock()
+	m.auditInstance(instanceID, logCategoryConnection, "socket_disconnected", "warning", InstanceLog{
+		Status: "disconnected", Source: "whatsapp_socket", Reason: "transient socket disconnect; automatic reconnect expected",
+	})
 }

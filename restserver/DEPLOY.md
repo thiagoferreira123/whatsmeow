@@ -11,7 +11,8 @@ Serviço "WhatsApp" (whatsmeow/restserver) em produção, **isolado**, na EC2/Co
 - **Persistência:** named volume `whatsmeow-zap-data` montado em `/data` (sessões/keys do WhatsApp sobrevivem a redeploys);
   SQLite WAL em `/data/whatsmeow.db`.
 - **Env vars (Coolify):** `ADMIN_API_KEY` (auth do painel/API), `WEBHOOK_SECRET` (HMAC default do webhook global),
-  `WATCHDOG_SECONDS=30`, `PORT=8080`. (`WHATSMEOW_DSN` vem do Dockerfile apontando p/ `/data`.)
+  `WATCHDOG_SECONDS=30`, `PORT=8080`, `INSTANCE_LOG_RETENTION_DAYS=7` e
+  `INSTANCE_LOG_CLEANUP_INTERVAL_MINUTES=60`. (`WHATSMEOW_DSN` vem do Dockerfile apontando p/ `/data`.)
 - **Tuning de escala (defaults no código/Dockerfile, override por env):** `CONNECT_CONCURRENCY=8`
   (máx. de `Connect()` simultâneos no boot/watchdog — evita thundering herd com centenas de instâncias),
   `DB_MAX_CONNS=8` (pool SQLite), `GOMEMLIMIT=1750MiB` (soft cap do GC; a EC2 é compartilhada com o prod).
