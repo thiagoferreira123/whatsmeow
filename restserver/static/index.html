@@ -3,386 +3,272 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>whatsmeow • painel</title>
+<title>Instâncias WhatsApp</title>
 <style>
   :root {
-    --bg:#0b141a; --panel:#111b21; --panel2:#1f2c34; --line:#2a3942;
-    --txt:#e9edef; --muted:#8696a0; --accent:#00a884; --accent2:#06cf9c;
-    --danger:#f15c6d; --warn:#f0b232; --radius:12px;
+    color-scheme: dark;
+    --bg:#0b141a;
+    --panel:#111b21;
+    --panel-hover:#18252d;
+    --line:#26343d;
+    --text:#e9edef;
+    --muted:#8696a0;
+    --green:#25d366;
+    --green-soft:rgba(37,211,102,.12);
+    --yellow:#f0b232;
+    --gray:#9aa7af;
+    --red:#f15c6d;
+    --red-soft:rgba(241,92,109,.1);
   }
   *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt)}
-  header{display:flex;align-items:center;gap:12px;padding:14px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.3px}
-  header .logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;font-size:16px}
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--danger);box-shadow:0 0 0 3px rgba(241,92,109,.15)}
-  .dot.ok{background:var(--accent2);box-shadow:0 0 0 3px rgba(6,207,156,.15)}
+  body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  button,input{font:inherit}
+  header{height:64px;display:flex;align-items:center;gap:12px;padding:0 24px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .logo{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:var(--green);color:#062b16;font-weight:800}
+  h1{margin:0;font-size:16px;font-weight:650;letter-spacing:.1px}
+  .health{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 0 3px rgba(241,92,109,.12)}
+  .health.ok{background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
   .spacer{flex:1}
-  .key{display:flex;align-items:center;gap:6px}
-  .key input{width:160px}
-  main{max-width:1000px;margin:0 auto;padding:22px 18px 60px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:20px}
-  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 14px}
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px}
-  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px}
-  .stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
-  .stat-value{font-size:27px;font-weight:700;line-height:1.15;margin-top:5px}
-  .stat.connected .stat-value{color:var(--accent2)}
-  .stat.connecting .stat-value{color:var(--warn)}
-  .stat.disconnected .stat-value{color:var(--muted)}
-  label{display:block;font-size:12px;color:var(--muted);margin:0 0 4px}
-  input,select{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 11px;font-size:14px;width:100%;outline:none}
-  input:focus,select:focus{border-color:var(--accent)}
-  .row{display:flex;gap:12px;flex-wrap:wrap}
-  .row>div{flex:1;min-width:150px}
-  button{cursor:pointer;border:none;border-radius:8px;padding:9px 14px;font-size:13px;font-weight:600;background:var(--accent);color:#04231b;transition:.15s}
-  button:hover{background:var(--accent2)}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  button.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
-  button.ghost:hover{border-color:var(--accent);background:var(--panel2)}
-  button.danger{background:transparent;border:1px solid rgba(241,92,109,.4);color:var(--danger)}
-  button.danger:hover{background:rgba(241,92,109,.12)}
-  button.sm{padding:6px 10px;font-size:12px}
+  button{cursor:pointer;border:0;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:650}
+  .logout{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .logout:hover{color:var(--text);border-color:#42535e}
+  main{width:min(1040px,calc(100% - 32px));margin:28px auto 64px}
+  .panel{overflow:hidden;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+  .panel-title{display:flex;align-items:center;padding:18px 20px;border-bottom:1px solid var(--line)}
+  .panel-title h2{margin:0;font-size:14px;font-weight:650}
+  .panel-title span{margin-left:8px;color:var(--muted);font-size:12px}
   table{width:100%;border-collapse:collapse}
-  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--line)}
-  td{padding:11px 10px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
-  tr:last-child td{border-bottom:none}
-  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:20px}
-  .badge .b-dot{width:7px;height:7px;border-radius:50%}
-  .badge.connected{background:rgba(6,207,156,.14);color:var(--accent2)} .badge.connected .b-dot{background:var(--accent2)}
-  .badge.connecting{background:rgba(240,178,50,.14);color:var(--warn)} .badge.connecting .b-dot{background:var(--warn);animation:pulse 1s infinite}
-  .badge.disconnected{background:rgba(134,150,160,.14);color:var(--muted)} .badge.disconnected .b-dot{background:var(--muted)}
-  @keyframes pulse{50%{opacity:.3}}
-  .muted{color:var(--muted);font-size:12px}
-  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--muted)}
+  th{padding:11px 16px;text-align:left;color:var(--muted);font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.55px}
+  td{padding:15px 16px;border-top:1px solid var(--line);font-size:14px;vertical-align:middle}
+  tbody tr:hover{background:var(--panel-hover)}
+  .instance-name{font-weight:650}
+  .instance-id{margin-top:4px;color:var(--muted);font:11px ui-monospace,SFMono-Regular,Consolas,monospace}
   .profile{display:flex;align-items:center;gap:10px}
-  .avatar{width:40px;height:40px;border-radius:50%;position:relative;overflow:hidden;flex:0 0 40px;display:grid;place-items:center;background:var(--panel2);color:var(--muted);font-size:13px;font-weight:700}
-  .avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-  .biz{font-size:10px;background:rgba(6,207,156,.14);color:var(--accent2);padding:1px 6px;border-radius:10px;vertical-align:middle}
-  .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-  .empty{text-align:center;color:var(--muted);padding:30px 0}
-  /* modal */
-  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;place-items:center;z-index:20;padding:20px}
-  .overlay.show{display:grid}
-  .modal{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;max-width:380px;width:100%;text-align:center;position:relative}
-  .modal h3{margin:0 0 4px;font-size:17px}
-  .modal .close{position:absolute;top:12px;right:14px;background:none;color:var(--muted);font-size:20px;padding:2px 8px}
-  .modal .close:hover{color:var(--txt);background:none}
-  .qrbox{background:#fff;border-radius:12px;padding:14px;display:inline-block;margin:14px 0;min-height:230px;min-width:230px;display:grid;place-items:center}
-  .qrbox img{width:230px;height:230px;display:block}
-  #sendModal .modal{text-align:left;max-width:420px}
-  .tabs{display:flex;gap:8px;margin-bottom:14px}
-  .tabs button{flex:1;background:var(--panel2);color:var(--muted)}
-  .tabs button.active{background:var(--accent);color:#04231b}
-  /* toast */
-  #toasts{position:fixed;bottom:18px;right:18px;display:flex;flex-direction:column;gap:8px;z-index:50}
-  .toast{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);padding:11px 15px;border-radius:8px;font-size:13px;max-width:320px;animation:slide .2s}
-  .toast.err{border-left-color:var(--danger)}
-  @keyframes slide{from{transform:translateX(20px);opacity:0}}
+  .avatar{width:36px;height:36px;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:#22313a;color:var(--muted);font-size:12px;font-weight:700}
+  .avatar img{width:100%;height:100%;object-fit:cover}
+  .profile-name{font-size:13px}
+  .phone{margin-top:3px;color:var(--muted);font:11px ui-monospace,SFMono-Regular,Consolas,monospace}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;font-size:12px;font-weight:650}
+  .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .badge.connected{color:var(--green);background:var(--green-soft)}
+  .badge.connecting{color:var(--yellow);background:rgba(240,178,50,.12)}
+  .badge.hibernated,.badge.disconnected{color:var(--gray);background:rgba(154,167,175,.1)}
+  .date{color:var(--muted);font-size:12px;white-space:nowrap}
+  .actions{text-align:right}
+  .remove{background:transparent;border:1px solid rgba(241,92,109,.35);color:var(--red)}
+  .remove:hover{background:var(--red-soft);border-color:var(--red)}
+  .remove:disabled{opacity:.5;cursor:wait}
+  .empty{padding:54px 20px;text-align:center;color:var(--muted)}
+  .error{padding:18px 20px;color:var(--red);text-align:center}
+  .overlay{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:20px;background:var(--bg)}
+  .overlay.hidden{display:none}
+  .login{width:min(340px,100%);padding:26px;background:var(--panel);border:1px solid var(--line);border-radius:16px;text-align:center}
+  .login .logo{width:44px;height:44px;margin:0 auto 14px;border-radius:12px}
+  .login h2{margin:0 0 6px;font-size:18px}
+  .login p{margin:0 0 18px;color:var(--muted);font-size:13px}
+  .login input{width:100%;padding:11px 12px;color:var(--text);background:#1d2a32;border:1px solid var(--line);border-radius:8px;outline:none;text-align:center}
+  .login input:focus{border-color:var(--green)}
+  .login button{width:100%;margin-top:12px;padding:11px;background:var(--green);color:#062b16}
+  .login-error{min-height:18px;margin-top:10px;color:var(--red);font-size:12px}
+  @media(max-width:760px){
+    header{padding:0 16px}
+    main{width:min(100% - 20px,1040px);margin-top:18px}
+    .panel{overflow-x:auto}
+    table{min-width:720px}
+  }
 </style>
 </head>
 <body>
 <header>
-  <div class="logo">🟢</div>
-  <h1>whatsmeow <span class="muted">painel</span></h1>
-  <span id="health" class="dot" title="servidor"></span>
+  <div class="logo">W</div>
+  <h1>Instâncias WhatsApp</h1>
+  <span class="health" id="health" title="Servidor"></span>
   <div class="spacer"></div>
-  <button class="ghost sm" id="btnLogout" style="display:none">Sair</button>
+  <button class="logout" id="logout" hidden>Sair</button>
 </header>
 
 <main>
-  <div class="stats" aria-label="Resumo das instâncias" aria-live="polite">
-    <div class="stat"><div class="stat-label">Total</div><div class="stat-value" id="statTotal">—</div></div>
-    <div class="stat connected"><div class="stat-label">Conectadas</div><div class="stat-value" id="statConnected">—</div></div>
-    <div class="stat connecting"><div class="stat-label">Conectando</div><div class="stat-value" id="statConnecting">—</div></div>
-    <div class="stat"><div class="stat-label">Pausadas</div><div class="stat-value" id="statHibernated">—</div></div>
-    <div class="stat disconnected"><div class="stat-label">Desconectadas</div><div class="stat-value" id="statDisconnected">—</div></div>
-  </div>
-
-  <div class="card">
-    <h2>Nova instância</h2>
-    <div class="row">
-      <div><label>Nome *</label><input id="newName" placeholder="ex: nutricionist_46" /></div>
-      <div><label>adminField01</label><input id="newAdmin" placeholder="ex: 46" /></div>
-      <div style="flex:0;display:flex;align-items:flex-end"><button id="btnCreate">Criar</button></div>
+  <section class="panel">
+    <div class="panel-title">
+      <h2>Instâncias criadas</h2>
+      <span id="total"></span>
     </div>
-  </div>
-
-  <div class="card">
-    <h2>Webhook global (WhatsApp Cloud API)</h2>
-    <div class="muted" style="margin-bottom:12px">Um único webhook para TODAS as instâncias. Entrega mensagens e eventos <b>confirmado (1)</b> / <b>cancelado (2)</b> no envelope oficial (<span class="mono">entry/changes/value</span>), assinado em <span class="mono">X-Hub-Signature-256</span>. URL de verificação (handshake): <span class="mono" id="cbUrl"></span></div>
-    <div class="row">
-      <div><label>URL de destino</label><input id="whUrl" placeholder="https://api-help.dietsystem.com.br/webhooks/whatsapp" /></div>
-      <div style="flex:0;min-width:170px"><label>Verify token</label><input id="whVerify" placeholder="token de verificação" /></div>
-      <div style="flex:0;min-width:170px"><label>App secret (HMAC)</label><input id="whSecret" type="password" placeholder="assinatura" /></div>
-    </div>
-    <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
-      <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="whEnabled" style="width:auto" /> Ativo</label>
-      <button id="btnSaveWebhook">Salvar webhook</button>
-      <span id="whStatus" class="muted"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 style="display:flex;align-items:center;justify-content:space-between">
-      <span>Instâncias</span>
-      <button class="ghost sm" id="btnRefresh">↻ Atualizar</button>
-    </h2>
     <table>
-      <thead><tr><th>Instância</th><th>Status</th><th>Perfil WhatsApp</th><th></th></tr></thead>
-      <tbody id="rows"><tr><td colspan="4" class="empty">Carregando…</td></tr></tbody>
+      <thead>
+        <tr>
+          <th>Instância</th>
+          <th>Status</th>
+          <th>WhatsApp</th>
+          <th>Criada em</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="5" class="empty">Carregando…</td></tr>
+      </tbody>
     </table>
-  </div>
+  </section>
 </main>
 
-<!-- QR modal -->
-<div class="overlay" id="qrModal">
-  <div class="modal">
-    <button class="close" data-close="qrModal">×</button>
-    <h3>Conectar WhatsApp</h3>
-    <div class="muted" id="qrName"></div>
-    <div class="qrbox"><img id="qrImg" alt="QR" /></div>
-    <div id="qrStatus" class="badge connecting"><span class="b-dot"></span> aguardando…</div>
-    <p class="muted" style="margin:14px 0 0">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p>
-  </div>
+<div class="overlay" id="loginOverlay">
+  <form class="login" id="loginForm">
+    <div class="logo">W</div>
+    <h2>Instâncias WhatsApp</h2>
+    <p>Digite a senha para acessar</p>
+    <input id="password" type="password" placeholder="Senha" autocomplete="current-password" autofocus />
+    <button type="submit">Entrar</button>
+    <div class="login-error" id="loginError"></div>
+  </form>
 </div>
-
-<!-- Send modal -->
-<div class="overlay" id="sendModal">
-  <div class="modal">
-    <button class="close" data-close="sendModal">×</button>
-    <h3>Enviar mensagem</h3>
-    <div class="muted" id="sendName" style="margin-bottom:14px"></div>
-    <div class="tabs">
-      <button class="active" data-tab="text">Texto</button>
-      <button data-tab="media">Mídia</button>
-    </div>
-    <div style="margin-bottom:12px"><label>Número (com DDI)</label><input id="sendNumber" placeholder="5511999998888" /></div>
-    <div id="tabText">
-      <label>Mensagem</label><input id="sendText" placeholder="Olá!" />
-    </div>
-    <div id="tabMedia" style="display:none">
-      <div class="row" style="margin-bottom:10px">
-        <div style="flex:0;min-width:130px"><label>Tipo</label>
-          <select id="mediaType"><option value="">auto</option><option>image</option><option>video</option><option>audio</option><option>document</option></select>
-        </div>
-        <div><label>Legenda</label><input id="mediaCaption" placeholder="opcional" /></div>
-      </div>
-      <label>Arquivo (upload do seu computador)</label>
-      <input id="mediaFile" type="file" />
-      <div class="muted" style="margin-top:6px">O arquivo é enviado por upload (multipart) para o WhatsApp.</div>
-    </div>
-    <button id="btnSend" style="width:100%;margin-top:16px">Enviar</button>
-  </div>
-</div>
-
-<!-- Login gate -->
-<div class="overlay show" id="loginOverlay" style="background:var(--bg)">
-  <div class="modal" style="max-width:340px">
-    <div class="logo" style="margin:0 auto 10px;width:40px;height:40px;font-size:22px">🟢</div>
-    <h3>whatsmeow <span class="muted">painel</span></h3>
-    <div class="muted" style="margin-bottom:16px">Digite a senha para entrar</div>
-    <input id="loginPass" type="password" placeholder="senha" style="text-align:center" autofocus />
-    <button id="btnLogin" style="width:100%;margin-top:14px">Entrar</button>
-    <div id="loginErr" style="color:var(--danger);font-size:13px;margin-top:10px;min-height:16px"></div>
-  </div>
-</div>
-
-<div id="toasts"></div>
 
 <script>
-const $ = s => document.querySelector(s);
-const api = (m,p,b) => fetch(p,{method:m,headers:headers(b),body:b?JSON.stringify(b):undefined})
-  .then(async r=>{ const t=await r.text(); let j; try{j=t?JSON.parse(t):null}catch{j=t}
-    if(!r.ok) throw new Error((j&&j.error)||r.status); return j; });
-function headers(b){ const h={}; if(b) h['Content-Type']='application/json';
-  const k=window.__key||''; if(k) h['Authorization']='Bearer '+k; return h; }
-function toast(msg,err){ const d=document.createElement('div'); d.className='toast'+(err?' err':'');
-  d.textContent=msg; $('#toasts').appendChild(d); setTimeout(()=>d.remove(),3500); }
+const $ = selector => document.querySelector(selector);
+const storageKey = 'wmKey';
+let apiKey = '';
+let started = false;
 
-window.__key = '';
-
-const badge = s => `<span class="badge ${s}"><span class="b-dot"></span>${s}</span>`;
-const short = id => id ? id.slice(0,8) : '';
-function initials(s){ s=(s||'').trim(); if(!s) return '?'; const p=s.split(/\s+/); return ((p[0][0]||'')+(p[1]?p[1][0]:'')).toUpperCase(); }
-function profileCell(i){
-  if(!i.owner && !i.profileName && !i.profilePicUrl) return '<span class="muted">—</span>';
-  const ini = esc(initials(i.profileName||i.owner||'?'));
-  const img = i.profilePicUrl ? `<img src="${esc(i.profilePicUrl)}" referrerpolicy="no-referrer" onerror="this.remove()" />` : '';
-  const av = `<div class="avatar">${ini}${img}</div>`;
-  const name = i.profileName ? esc(i.profileName) : '<span class="muted">—</span>';
-  const biz = i.isBusiness ? ' <span class="biz">business</span>' : '';
-  const phone = i.owner ? `<div class="mono">+${esc(i.owner)}</div>` : '';
-  return `<div class="profile">${av}<div>${name}${biz}${phone}</div></div>`;
+function escapeHTML(value){
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  })[char]);
 }
 
-function updateStats(list){
-  const counts={connected:0,connecting:0,hibernated:0,disconnected:0};
-  for(const instance of list){
-    const status=instance.status||'disconnected';
-    if(Object.prototype.hasOwnProperty.call(counts,status)) counts[status]++;
-    else counts.disconnected++;
+function initials(value){
+  const words = String(value || '').trim().split(/\s+/).filter(Boolean);
+  return words.length ? (words[0][0] + (words[1]?.[0] || '')).toUpperCase() : '?';
+}
+
+function formatDate(value){
+  if(!value) return '—';
+  const date = new Date(value);
+  if(Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('pt-BR', {dateStyle:'short', timeStyle:'short'}).format(date);
+}
+
+function statusLabel(status){
+  return ({connected:'Conectada', connecting:'Conectando', hibernated:'Pausada', disconnected:'Desconectada'})[status] || 'Desconectada';
+}
+
+async function request(path, options = {}){
+  const headers = new Headers(options.headers || {});
+  if(apiKey) headers.set('Authorization', 'Bearer ' + apiKey);
+  const response = await fetch(path, {...options, headers});
+  if(response.status === 401){
+    localStorage.removeItem(storageKey);
+    apiKey = '';
+    showLogin();
+    throw new Error('Não autorizado');
   }
-  $('#statTotal').textContent=list.length;
-  $('#statConnected').textContent=counts.connected;
-  $('#statConnecting').textContent=counts.connecting;
-  $('#statHibernated').textContent=counts.hibernated;
-  $('#statDisconnected').textContent=counts.disconnected;
+  if(!response.ok){
+    const text = await response.text();
+    let message = text || `Erro ${response.status}`;
+    try{ message = JSON.parse(text).error || message; }catch{}
+    throw new Error(message);
+  }
+  if(response.status === 204) return null;
+  return response.json();
 }
 
-async function load(){
+function showLogin(){
+  $('#loginOverlay').classList.remove('hidden');
+  $('#logout').hidden = true;
+  $('#password').focus();
+}
+
+function startPanel(){
+  $('#loginOverlay').classList.add('hidden');
+  $('#logout').hidden = false;
+  if(started) return;
+  started = true;
+  loadInstances();
+  setInterval(loadInstances, 5000);
+}
+
+function profileHTML(instance){
+  const label = instance.profileName || instance.owner || 'Sem perfil';
+  const image = instance.profilePicUrl
+    ? `<img src="${escapeHTML(instance.profilePicUrl)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()" />`
+    : escapeHTML(initials(label));
+  const phone = instance.owner ? `<div class="phone">+${escapeHTML(instance.owner)}</div>` : '';
+  return `<div class="profile"><div class="avatar">${image}</div><div><div class="profile-name">${escapeHTML(instance.profileName || '—')}</div>${phone}</div></div>`;
+}
+
+async function loadInstances(){
   try{
-    const list = await api('GET','/instances') || [];
-    updateStats(list);
-    const rows = $('#rows');
-    if(!list.length){ rows.innerHTML='<tr><td colspan="4" class="empty">Nenhuma instância. Crie uma acima.</td></tr>'; return; }
-    rows.innerHTML = list.map(i=>`
-      <tr>
-        <td><div>${esc(i.name)}</div><div class="mono">${short(i.id)}</div></td>
-        <td>${badge(i.status||'disconnected')}</td>
-        <td>${profileCell(i)}</td>
-        <td><div class="acts">
-          ${i.status==='connected'
-            ? `<button class="ghost sm" data-send="${i.id}" data-name="${esc(i.name)}">Enviar</button>
-               <button class="ghost sm" data-disc="${i.id}">Desconectar</button>`
-            : `<button class="sm" data-qr="${i.id}" data-name="${esc(i.name)}">QR / Conectar</button>`}
-          <button class="danger sm" data-del="${i.id}">Excluir</button>
-        </div></td>
-      </tr>`).join('');
+    const instances = await request('/instances') || [];
     $('#health').classList.add('ok');
-  }catch(e){ $('#health').classList.remove('ok'); toast('Erro ao listar: '+e.message,true); }
-}
-const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-
-// create
-$('#btnCreate').onclick = async ()=>{
-  const name=$('#newName').value.trim(); if(!name){toast('Informe o nome',true);return;}
-  const btn=$('#btnCreate'); btn.disabled=true; const old=btn.textContent; btn.textContent='Criando…';
-  try{ const inst = await api('POST','/instances',{name,adminField01:$('#newAdmin').value.trim()});
-    $('#newName').value=$('#newAdmin').value=''; toast('Instância criada'); load();
-    openQR(inst.id, inst.name);   // gera o QR automaticamente — fluxo único
-  }catch(e){ toast('Erro: '+e.message,true); }
-  finally{ btn.disabled=false; btn.textContent=old; }
-};
-$('#btnRefresh').onclick = load;
-
-// table action delegation
-$('#rows').addEventListener('click', e=>{
-  const b=e.target.closest('button'); if(!b) return;
-  if(b.dataset.qr) openQR(b.dataset.qr, b.dataset.name);
-  else if(b.dataset.send) openSend(b.dataset.send, b.dataset.name);
-  else if(b.dataset.disc) doDisc(b.dataset.disc);
-  else if(b.dataset.del) doDel(b.dataset.del);
-});
-
-async function doDisc(id){ try{ await api('POST',`/instances/${id}/disconnect`); toast('Desconectado'); load(); }catch(e){toast(e.message,true);} }
-async function doDel(id){ if(!confirm('Excluir esta instância? A sessão será removida.'))return;
-  try{ await api('DELETE',`/instances/${id}`); toast('Excluída'); load(); }catch(e){toast(e.message,true);} }
-
-// ---- QR flow ----
-let qrTimer=null, qrPoll=null, qrId=null;
-async function openQR(id,name){
-  qrId=id; $('#qrName').textContent=name; $('#qrImg').src=''; setQrStatus('connecting','iniciando…');
-  show('qrModal'); refreshQR();
-  qrTimer=setInterval(refreshQR, 20000);            // QR rotaciona
-  qrPoll=setInterval(pollQRStatus, 2500);
-}
-async function refreshQR(){
-  try{ const r=await api('GET',`/instances/${qrId}/qr`);
-    if(r.status==='connected'){ onConnected(); return; }
-    if(r.qrcode){ $('#qrImg').src=r.qrcode; setQrStatus('connecting','escaneie o código'); }
-    else setQrStatus('connecting','conectando…');
-  }catch(e){ setQrStatus('disconnected','erro: '+e.message); }
-}
-async function pollQRStatus(){
-  try{ const s=await api('GET',`/instances/${qrId}/status`);
-    if(s.status==='connected'){ onConnected(); }
-  }catch{}
-}
-function onConnected(){ setQrStatus('connected','conectado! ✓'); stopQR(); setTimeout(()=>{close('qrModal');load();},1200); }
-function setQrStatus(cls,txt){ const el=$('#qrStatus'); el.className='badge '+cls; el.innerHTML='<span class="b-dot"></span> '+txt; }
-function stopQR(){ clearInterval(qrTimer); clearInterval(qrPoll); }
-
-// ---- Send flow ----
-let sendId=null;
-function openSend(id,name){ sendId=id; $('#sendName').textContent=name; show('sendModal'); }
-document.querySelectorAll('.tabs button').forEach(t=>t.onclick=()=>{
-  document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));
-  t.classList.add('active');
-  $('#tabText').style.display = t.dataset.tab==='text'?'block':'none';
-  $('#tabMedia').style.display = t.dataset.tab==='media'?'block':'none';
-});
-$('#btnSend').onclick = async ()=>{
-  const number=$('#sendNumber').value.trim(); if(!number){toast('Informe o número',true);return;}
-  const media = $('#tabMedia').style.display!=='none';
-  const btn=$('#btnSend'); btn.disabled=true; const old=btn.textContent; btn.textContent='Enviando…';
-  try{
-    if(media){
-      const f = $('#mediaFile').files[0]; if(!f){toast('Escolha um arquivo',true);return;}
-      const fd = new FormData();
-      fd.append('number', number);
-      fd.append('type', $('#mediaType').value);     // vazio = auto (inferido do mime)
-      fd.append('text', $('#mediaCaption').value.trim());
-      fd.append('fileName', f.name);
-      fd.append('file', f, f.name);
-      const h={}; const k=window.__key||''; if(k) h['Authorization']='Bearer '+k;
-      const r = await fetch(`/instances/${sendId}/send/media`,{method:'POST',headers:h,body:fd});
-      const t = await r.text(); if(!r.ok){ let j; try{j=JSON.parse(t)}catch{}; throw new Error((j&&j.error)||t||r.status); }
-    }else{ const text=$('#sendText').value.trim(); if(!text){toast('Escreva a mensagem',true);return;}
-      await api('POST',`/instances/${sendId}/send/text`,{number,text});
+    $('#total').textContent = instances.length === 1 ? '1 instância' : `${instances.length} instâncias`;
+    if(!instances.length){
+      $('#rows').innerHTML = '<tr><td colspan="5" class="empty">Nenhuma instância criada.</td></tr>';
+      return;
     }
-    toast('Mensagem enviada ✓'); close('sendModal'); $('#sendText').value=''; $('#mediaFile').value='';
-  }catch(e){ toast('Erro: '+e.message,true); }
-  finally{ btn.disabled=false; btn.textContent=old; }
-};
-
-// modal helpers
-function show(id){ $('#'+id).classList.add('show'); }
-function close(id){ $('#'+id).classList.remove('show'); if(id==='qrModal') stopQR(); }
-document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(b.dataset.close));
-document.querySelectorAll('.overlay').forEach(o=>o.addEventListener('click',e=>{ if(e.target===o && o.id!=='loginOverlay') close(o.id); }));
-
-// ---- Global webhook (Cloud API) ----
-async function loadWebhook(){
-  $('#cbUrl').textContent = location.origin + '/webhook';
-  try{ const gw = await api('GET','/webhook/config');
-    $('#whUrl').value=gw.url||''; $('#whVerify').value=gw.verifyToken||''; $('#whSecret').value=gw.appSecret||''; $('#whEnabled').checked=!!gw.enabled;
-  }catch(e){}
+    $('#rows').innerHTML = instances.map(instance => `
+      <tr>
+        <td><div class="instance-name">${escapeHTML(instance.name)}</div><div class="instance-id">${escapeHTML(instance.id)}</div></td>
+        <td><span class="badge ${escapeHTML(instance.status || 'disconnected')}">${statusLabel(instance.status)}</span></td>
+        <td>${profileHTML(instance)}</td>
+        <td class="date">${formatDate(instance.createdAt)}</td>
+        <td class="actions"><button class="remove" data-remove="${escapeHTML(instance.id)}" data-name="${escapeHTML(instance.name)}">Remover</button></td>
+      </tr>`).join('');
+  }catch(error){
+    $('#health').classList.remove('ok');
+    if(error.message !== 'Não autorizado') $('#rows').innerHTML = `<tr><td colspan="5" class="error">${escapeHTML(error.message)}</td></tr>`;
+  }
 }
-$('#btnSaveWebhook').onclick = async ()=>{
-  const body={ url:$('#whUrl').value.trim(), verifyToken:$('#whVerify').value.trim(), appSecret:$('#whSecret').value.trim(), enabled:$('#whEnabled').checked };
-  const s=$('#whStatus'); s.textContent='salvando…';
-  try{ const r=await api('POST','/webhook/config',body);
-    s.textContent = r.verified ? 'salvo ✓ — endpoint verificado' : (body.enabled&&body.url? 'salvo ✓ (handshake não confirmado — verifique URL/verify token)':'salvo ✓');
-    toast('Webhook global salvo');
-  }catch(e){ s.textContent=''; toast('Erro: '+e.message,true); }
-};
 
-// ---- Login gate ----
-const LSKEY='wmKey';
-async function checkAuth(key){
-  try{ const r=await fetch('/instances',{headers: key?{'Authorization':'Bearer '+key}:{}}); return r.status!==401; }
-  catch(e){ return false; }
-}
-let appStarted=false;
-function startApp(){ if(appStarted) return; appStarted=true;
-  $('#loginOverlay').classList.remove('show'); $('#btnLogout').style.display='';
-  load(); loadWebhook(); setInterval(load,5000);
-}
-async function doLogin(key){
-  if(await checkAuth(key)){ window.__key=key; localStorage.setItem(LSKEY,key); startApp(); return true; }
-  return false;
-}
-$('#btnLogin').onclick=async()=>{ $('#loginErr').textContent=''; const k=$('#loginPass').value;
-  if(!await doLogin(k)){ $('#loginErr').textContent='Senha incorreta'; $('#loginPass').value=''; $('#loginPass').focus(); } };
-$('#loginPass').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#btnLogin').click(); });
-$('#btnLogout').onclick=()=>{ localStorage.removeItem(LSKEY); window.__key=''; location.reload(); };
+$('#rows').addEventListener('click', async event => {
+  const button = event.target.closest('[data-remove]');
+  if(!button) return;
+  const name = button.dataset.name || 'esta instância';
+  if(!confirm(`Remover ${name}? A sessão do WhatsApp também será desconectada.`)) return;
+  button.disabled = true;
+  button.textContent = 'Removendo…';
+  try{
+    await request(`/instances/${encodeURIComponent(button.dataset.remove)}`, {method:'DELETE'});
+    await loadInstances();
+  }catch(error){
+    if(error.message !== 'Não autorizado') alert(error.message);
+    button.disabled = false;
+    button.textContent = 'Remover';
+  }
+});
 
-// boot: try stored password, otherwise show the login gate
-(async()=>{
-  const stored=localStorage.getItem(LSKEY)||'';
-  if(await checkAuth(stored)){ window.__key=stored; startApp(); }
-  else { $('#loginOverlay').classList.add('show'); $('#loginPass').focus(); }
+$('#loginForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const candidate = $('#password').value;
+  $('#loginError').textContent = '';
+  try{
+    const response = await fetch('/instances', {headers:{Authorization:'Bearer ' + candidate}});
+    if(!response.ok) throw new Error();
+    apiKey = candidate;
+    localStorage.setItem(storageKey, candidate);
+    $('#password').value = '';
+    startPanel();
+  }catch{
+    $('#loginError').textContent = 'Senha incorreta';
+    $('#password').value = '';
+    $('#password').focus();
+  }
+});
+
+$('#logout').addEventListener('click', () => {
+  localStorage.removeItem(storageKey);
+  apiKey = '';
+  location.reload();
+});
+
+(async () => {
+  const stored = localStorage.getItem(storageKey) || '';
+  if(!stored){ showLogin(); return; }
+  try{
+    const response = await fetch('/instances', {headers:{Authorization:'Bearer ' + stored}});
+    if(!response.ok) throw new Error();
+    apiKey = stored;
+    startPanel();
+  }catch{
+    localStorage.removeItem(storageKey);
+    showLogin();
+  }
 })();
 </script>
 </body>
