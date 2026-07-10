@@ -281,10 +281,27 @@ const eventLabels = {
   waiting_connection:'Aguardando conexão', queue_completed:'Envio da fila concluído', queue_failed:'Falha definitiva na fila', retry_scheduled:'Nova tentativa agendada'
 };
 
+const detailLabels = {
+  attemptedRecipient:'número tentado', resolvedRecipient:'número resolvido', errorType:'tipo do erro',
+  remote:'encerrado remotamente', autoReconnectExpected:'reconexão automática', code:'código',
+  errorCount:'falhas consecutivas', lastSuccess:'último sucesso', blockedUntil:'bloqueado até',
+  expiresInSeconds:'expira em segundos', nextAttemptInSeconds:'nova tentativa em segundos',
+  rateLimited:'limite de envio', attempts:'tentativas', attempt:'tentativa', owner:'proprietário',
+  profileName:'perfil', businessName:'empresa', canceled:'cancelados', queuedRecovered:'fila recuperada',
+  queueRecoveryError:'erro ao recuperar fila', name:'nome'
+};
+
+function formatDetailValue(value){
+  if(typeof value === 'boolean') return value ? 'sim' : 'não';
+  if(value === null || value === undefined) return '';
+  return String(value);
+}
+
 function renderLogs(logs){
   if(!logs.length){ $('#logList').innerHTML='<div class="empty">Nenhum evento registrado.</div>'; return; }
   $('#logList').innerHTML = logs.map(log => {
-    const meta = [log.status, log.source, log.recipient && `destino ${log.recipient}`, log.messageType, log.messageId && `msg ${log.messageId}`, log.queueJobId && `job ${log.queueJobId}`].filter(Boolean);
+    const details = Object.entries(log.details || {}).filter(([,value])=>value !== null && value !== undefined && value !== '').map(([key,value])=>`${detailLabels[key] || key}: ${formatDetailValue(value)}`);
+    const meta = [log.status, log.source, log.recipient && `destino ${log.recipient}`, log.messageType, log.messageId && `msg ${log.messageId}`, log.queueJobId && `job ${log.queueJobId}`, ...details].filter(Boolean);
     return `<div class="log-item ${escapeHTML(log.level)}"><span class="log-dot"></span><div class="log-top"><span class="log-event">${escapeHTML(eventLabels[log.event] || log.event)}</span><span class="log-time">${formatDate(log.createdAt)}</span></div>${log.reason ? `<div class="log-reason">${escapeHTML(log.reason)}</div>` : ''}${meta.length ? `<div class="log-meta">${meta.map(value=>`<span>${escapeHTML(value)}</span>`).join('')}</div>` : ''}</div>`;
   }).join('');
 }

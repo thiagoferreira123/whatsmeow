@@ -239,7 +239,12 @@ type StreamError struct {
 }
 
 // Disconnected is emitted when the websocket is closed by the server.
-type Disconnected struct{}
+// Err contains the transport/read failure when one was available. Some clean
+// remote closes don't include an error, so consumers must also inspect Remote.
+type Disconnected struct {
+	Remote bool
+	Err    error
+}
 
 // HistorySync is emitted when the phone has sent a blob of historical messages.
 type HistorySync struct {

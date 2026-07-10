@@ -76,9 +76,12 @@ diretório de execução).
 | `POST /instances/{id}/webhook` | `{url, secret?, events?, enabled?}` | `{ok:true}` |
 | `POST /instances/{id}/disconnect` | — | alias legado de hibernação (`204`) |
 
-O histórico por instância não armazena texto integral, arquivos, base64, tokens ou
-segredos. A exclusão da instância remove seus logs em cascata. A limpeza periódica
-mantém no máximo os dias configurados em `INSTANCE_LOG_RETENTION_DAYS`.
+O histórico por instância registra a causa técnica recebida do WebSocket nas
+desconexões e, nos envios, o número tentado, o número resolvido pelo WhatsApp, o
+tipo do erro e o motivo devolvido. Ele não armazena texto integral, arquivos,
+base64, tokens ou segredos. A exclusão da instância remove seus logs em cascata.
+A limpeza periódica mantém no máximo os dias configurados em
+`INSTANCE_LOG_RETENTION_DAYS`.
 
 `status` ∈ `disconnected | connecting | connected | hibernated`. `number` aceita telefone (`5511999998888`,
 com ou sem formatação) ou JID completo (`...@s.whatsapp.net`). O número é **resolvido via

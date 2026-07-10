@@ -62,7 +62,7 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 		case *events.StreamReplaced:
 			m.onStreamReplaced(instanceID)
 		case *events.Disconnected:
-			m.onDisconnected(instanceID)
+			m.onDisconnected(instanceID, v)
 		case *events.TemporaryBan:
 			m.onTemporaryBan(instanceID, v)
 		case *events.ClientOutdated:
@@ -418,7 +418,7 @@ func (m *Manager) onKeepAliveTimeout(instanceID string, v *events.KeepAliveTimeo
 	})
 }
 
-func (m *Manager) onDisconnected(instanceID string) {
+func (m *Manager) onDisconnected(instanceID string, event *events.Disconnected) {
 	rt := m.get(instanceID)
 	if rt == nil {
 		return
@@ -430,7 +430,18 @@ func (m *Manager) onDisconnected(instanceID string) {
 		rt.meta.Status = "disconnected"
 	}
 	rt.mu.Unlock()
+	reason := "WebSocket encerrado sem erro de transporte informado."
+	details := map[string]any{
+		"remote":                event.Remote,
+		"autoReconnectExpected": true,
+	}
+	if event.Err != nil {
+		reason = event.Err.Error()
+		details["errorType"] = fmt.Sprintf("%T", event.Err)
+	} else if !event.Remote {
+		reason = "Conexão encerrada localmente ou nova tentativa inicial solicitada."
+	}
 	m.auditInstance(instanceID, logCategoryConnection, "socket_disconnected", "warning", InstanceLog{
-		Status: "disconnected", Source: "whatsapp_socket", Reason: "transient socket disconnect; automatic reconnect expected",
+		Status: "disconnected", Source: "whatsapp_socket", Reason: reason, Details: details,
 	})
 }

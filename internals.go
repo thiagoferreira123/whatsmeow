@@ -131,8 +131,8 @@ func (int *DangerousInternalClient) UnlockedConnect(ctx context.Context) error {
 	return int.c.unlockedConnect(ctx)
 }
 
-func (int *DangerousInternalClient) OnDisconnect(ctx context.Context, ns *socket.NoiseSocket, remote bool) {
-	int.c.onDisconnect(ctx, ns, remote)
+func (int *DangerousInternalClient) OnDisconnect(ctx context.Context, ns *socket.NoiseSocket, remote bool, err error) {
+	int.c.onDisconnect(ctx, ns, remote, err)
 }
 
 func (int *DangerousInternalClient) ExpectDisconnect() {

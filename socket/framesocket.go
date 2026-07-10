@@ -32,7 +32,7 @@ type FrameSocket struct {
 	HTTPClient  *http.Client
 
 	Frames       chan []byte
-	OnDisconnect func(ctx context.Context, remote bool)
+	OnDisconnect func(ctx context.Context, remote bool, err error)
 
 	Header []byte
 
@@ -42,6 +42,7 @@ type FrameSocket struct {
 	receivedLength int
 	incoming       []byte
 	partialHeader  []byte
+	disconnectErr  error
 }
 
 func NewFrameSocket(log waLog.Logger, client *http.Client) *FrameSocket {
@@ -70,6 +71,8 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
 	}
 
 	fs.closed.Store(true)
+	disconnectErr := fs.disconnectErr
+	fs.disconnectErr = nil
 	if code > 0 {
 		err := conn.Close(code, "")
 		if err != nil {
@@ -83,8 +86,9 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
 	}
 	fs.cancel()
 	fs.cancel = nil
-	if fs.OnDisconnect != nil {
-		go fs.OnDisconnect(fs.parentCtx, code == 0)
+	onDisconnect := fs.OnDisconnect
+	if onDisconnect != nil {
+		go onDisconnect(fs.parentCtx, code == 0, disconnectErr)
 	}
 }
 
@@ -96,6 +100,8 @@ func (fs *FrameSocket) Connect(ctx context.Context) error {
 	}
 	fs.parentCtx = ctx
 	fs.cancelCtx, fs.cancel = context.WithCancel(ctx)
+	fs.closed.Store(false)
+	fs.disconnectErr = nil
 
 	fs.log.Debugf("Dialing %s", fs.URL)
 	conn, resp, err := websocket.Dial(ctx, fs.URL, fs.makeDialOptions())
@@ -212,6 +218,11 @@ func (fs *FrameSocket) readPump(conn *websocket.Conn, ctx context.Context) {
 			// Ignore the error if the context has been closed
 			if !fs.closed.Load() && !errors.Is(ctx.Err(), context.Canceled) {
 				fs.log.Errorf("Error reading from websocket: %v", err)
+				fs.lock.Lock()
+				if fs.conn.Load() == conn {
+					fs.disconnectErr = err
+				}
+				fs.lock.Unlock()
 			}
 			return
 		} else if msgType != websocket.MessageBinary {

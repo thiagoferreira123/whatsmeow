@@ -751,9 +751,12 @@ func (m *Manager) resolveRecipient(ctx context.Context, cli *whatsmeow.Client, n
 // SendText sends a plain text message and returns the message id.
 func (m *Manager) SendText(ctx context.Context, id, number, text string) (messageID string, sendErr error) {
 	audit := sendAuditFromContext(ctx)
-	recipientAudit := permissionKey(number)
-	m.auditSendAttempt(id, recipientAudit, "text", audit)
-	defer func() { m.auditSendResult(id, recipientAudit, "text", messageID, sendErr, audit) }()
+	attemptedRecipient := permissionKey(number)
+	resolvedRecipient := ""
+	m.auditSendAttempt(id, attemptedRecipient, "text", audit)
+	defer func() {
+		m.auditSendResult(id, attemptedRecipient, resolvedRecipient, "text", messageID, sendErr, audit)
+	}()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -767,7 +770,7 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (messag
 		return "", err
 	}
 	recipient := permissionKey(jid.User)
-	recipientAudit = recipient
+	resolvedRecipient = recipient
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}
@@ -788,9 +791,11 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (messag
 // outbound policy as REST-initiated messages.
 func (m *Manager) sendTextJID(ctx context.Context, id string, jid types.JID, text string) (messageID string, sendErr error) {
 	audit := sendAuditFromContext(ctx)
-	recipientAudit := permissionKey(jid.User)
-	m.auditSendAttempt(id, recipientAudit, "text", audit)
-	defer func() { m.auditSendResult(id, recipientAudit, "text", messageID, sendErr, audit) }()
+	attemptedRecipient := permissionKey(jid.User)
+	m.auditSendAttempt(id, attemptedRecipient, "text", audit)
+	defer func() {
+		m.auditSendResult(id, attemptedRecipient, attemptedRecipient, "text", messageID, sendErr, audit)
+	}()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -821,9 +826,12 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 	if mediaType == "" {
 		mediaType = "media"
 	}
-	recipientAudit := permissionKey(number)
-	m.auditSendAttempt(id, recipientAudit, mediaType, audit)
-	defer func() { m.auditSendResult(id, recipientAudit, mediaType, messageID, sendErr, audit) }()
+	attemptedRecipient := permissionKey(number)
+	resolvedRecipient := ""
+	m.auditSendAttempt(id, attemptedRecipient, mediaType, audit)
+	defer func() {
+		m.auditSendResult(id, attemptedRecipient, resolvedRecipient, mediaType, messageID, sendErr, audit)
+	}()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -837,7 +845,7 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 		return "", err
 	}
 	recipient := permissionKey(jid.User)
-	recipientAudit = recipient
+	resolvedRecipient = recipient
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}
@@ -865,9 +873,12 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 	if mediaType == "" {
 		mediaType = "media"
 	}
-	recipientAudit := permissionKey(number)
-	m.auditSendAttempt(id, recipientAudit, mediaType, audit)
-	defer func() { m.auditSendResult(id, recipientAudit, mediaType, messageID, sendErr, audit) }()
+	attemptedRecipient := permissionKey(number)
+	resolvedRecipient := ""
+	m.auditSendAttempt(id, attemptedRecipient, mediaType, audit)
+	defer func() {
+		m.auditSendResult(id, attemptedRecipient, resolvedRecipient, mediaType, messageID, sendErr, audit)
+	}()
 	rt, err := m.requireLoggedIn(id)
 	if err != nil {
 		return "", err
@@ -881,7 +892,7 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 		return "", err
 	}
 	recipient := permissionKey(jid.User)
-	recipientAudit = recipient
+	resolvedRecipient = recipient
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}

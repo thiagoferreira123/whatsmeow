@@ -24,7 +24,7 @@ type Handlers struct {
 	cfg Config
 }
 
-const serviceVersion = "audit-v3"
+const serviceVersion = "audit-v4-diagnostics"
 
 func NewHandlers(mgr *Manager, cfg Config) *Handlers {
 	return &Handlers{mgr: mgr, cfg: cfg}

@@ -74,21 +74,33 @@ func (m *Manager) auditSendAttempt(instanceID, recipient, messageType string, au
 	m.auditInstance(instanceID, logCategorySend, "send_attempt", "info", InstanceLog{
 		Status: "processing", Source: audit.Source, Recipient: recipient,
 		MessageType: messageType, QueueJobID: audit.QueueJobID,
+		Reason:  "Solicitação de envio recebida.",
+		Details: map[string]any{"attemptedRecipient": recipient},
 	})
 }
 
-func (m *Manager) auditSendResult(instanceID, recipient, messageType, messageID string, sendErr error, audit sendAuditContext) {
+func (m *Manager) auditSendResult(instanceID, attemptedRecipient, resolvedRecipient, messageType, messageID string, sendErr error, audit sendAuditContext) {
+	recipient := resolvedRecipient
+	if recipient == "" {
+		recipient = attemptedRecipient
+	}
 	entry := InstanceLog{
 		Source: audit.Source, Recipient: recipient, MessageType: messageType,
 		MessageID: messageID, QueueJobID: audit.QueueJobID,
+		Details: map[string]any{"attemptedRecipient": attemptedRecipient},
+	}
+	if resolvedRecipient != "" {
+		entry.Details["resolvedRecipient"] = resolvedRecipient
 	}
 	if sendErr != nil {
 		entry.Status = "failed"
 		entry.Reason = sendErr.Error()
+		entry.Details["errorType"] = fmt.Sprintf("%T", sendErr)
 		m.auditInstance(instanceID, logCategorySend, "send_failed", "error", entry)
 		return
 	}
 	entry.Status = "sent"
+	entry.Reason = "Mensagem aceita pelo servidor do WhatsApp."
 	m.auditInstance(instanceID, logCategorySend, "send_success", "info", entry)
 }
 

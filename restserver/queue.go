@@ -336,6 +336,11 @@ func (m *Manager) queueWorker(ctx context.Context, poll time.Duration) {
 }
 
 func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
+	var auditPayload struct {
+		Number string `json:"number"`
+	}
+	_ = json.Unmarshal([]byte(job.PayloadJSON), &auditPayload)
+	recipient := permissionKey(auditPayload.Number)
 	rt := m.get(job.InstanceID)
 	if rt == nil {
 		_ = m.store.FailQueue(job.ID, "instance no longer exists", time.Now())
@@ -349,7 +354,7 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 		_, _ = m.store.DeferQueue(job, queueWaitingConnection, "session is not ready", time.Now().Add(10*time.Second), false)
 		if job.LastError != "session is not ready" {
 			m.auditInstance(job.InstanceID, logCategoryQueue, "waiting_connection", "warning", InstanceLog{
-				Status: queueWaitingConnection, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID,
+				Status: queueWaitingConnection, Source: "queue", Recipient: recipient, MessageType: job.Kind, QueueJobID: job.ID,
 				Reason: "session is not ready",
 			})
 		}
@@ -375,7 +380,7 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 		_ = m.store.FinishQueue(job.ID, messageID, time.Now())
 		m.stats.queueSent.Add(1)
 		m.auditInstance(job.InstanceID, logCategoryQueue, "queue_completed", "info", InstanceLog{
-			Status: queueSent, Source: "queue", MessageType: job.Kind, MessageID: messageID, QueueJobID: job.ID,
+			Status: queueSent, Source: "queue", Recipient: recipient, MessageType: job.Kind, MessageID: messageID, QueueJobID: job.ID,
 		})
 		return
 	}
@@ -394,14 +399,14 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 			}
 			_, _ = m.store.DeferQueue(job, queueQueued, err.Error(), time.Now().Add(wait), false)
 			m.auditInstance(job.InstanceID, logCategoryQueue, "retry_scheduled", "warning", InstanceLog{
-				Status: queueQueued, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+				Status: queueQueued, Source: "queue", Recipient: recipient, MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
 				Details: map[string]any{"nextAttemptInSeconds": int(wait.Seconds()), "rateLimited": true},
 			})
 			return
 		case ae.Status >= 400 && ae.Status < 500:
 			_ = m.store.FailQueue(job.ID, err.Error(), time.Now())
 			m.auditInstance(job.InstanceID, logCategoryQueue, "queue_failed", "error", InstanceLog{
-				Status: queueFailed, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+				Status: queueFailed, Source: "queue", Recipient: recipient, MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
 			})
 			return
 		}
@@ -414,12 +419,12 @@ func (m *Manager) processQueueJob(ctx context.Context, job QueueJob) {
 	if terminal {
 		m.log.Warnf("queue job %s failed permanently after %d attempts: %v", job.ID, job.MaxAttempts, err)
 		m.auditInstance(job.InstanceID, logCategoryQueue, "queue_failed", "error", InstanceLog{
-			Status: queueFailed, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+			Status: queueFailed, Source: "queue", Recipient: recipient, MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
 			Details: map[string]any{"attempts": job.MaxAttempts},
 		})
 	} else {
 		m.auditInstance(job.InstanceID, logCategoryQueue, "retry_scheduled", "warning", InstanceLog{
-			Status: queueQueued, Source: "queue", MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
+			Status: queueQueued, Source: "queue", Recipient: recipient, MessageType: job.Kind, QueueJobID: job.ID, Reason: err.Error(),
 			Details: map[string]any{"nextAttemptInSeconds": int(seconds), "attempt": job.Attempts + 1},
 		})
 	}

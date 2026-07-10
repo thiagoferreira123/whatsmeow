@@ -509,7 +509,7 @@ func (cli *Client) ConnectContext(ctx context.Context) error {
 	err := cli.unlockedConnect(ctx)
 	if isRetryableConnectError(err) && cli.InitialAutoReconnect && cli.EnableAutoReconnect {
 		cli.Log.Errorf("Initial connection failed but reconnecting in background (%v)", err)
-		go cli.dispatchEvent(&events.Disconnected{})
+		go cli.dispatchEvent(&events.Disconnected{Err: err})
 		go cli.autoReconnect(ctx)
 		return nil
 	}
@@ -568,7 +568,7 @@ func (cli *Client) IsLoggedIn() bool {
 	return cli != nil && cli.isLoggedIn.Load()
 }
 
-func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, remote bool) {
+func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, remote bool, disconnectErr error) {
 	ns.Stop(false, false)
 	cli.socketLock.Lock()
 	defer cli.socketLock.Unlock()
@@ -577,7 +577,7 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
 		cli.clearResponseWaiters(xmlStreamEndNode)
 		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
 			cli.Log.Debugf("Emitting Disconnected event")
-			go cli.dispatchEvent(&events.Disconnected{})
+			go cli.dispatchEvent(&events.Disconnected{Remote: remote, Err: disconnectErr})
 			go cli.autoReconnect(ctx)
 		} else if remote {
 			cli.Log.Debugf("OnDisconnect() called, but it was expected, so not emitting event")

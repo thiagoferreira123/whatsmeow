@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"go.mau.fi/whatsmeow/types/events"
 )
 
 func TestInstanceLogsRetentionFilteringAndPagination(t *testing.T) {
@@ -112,7 +115,8 @@ func TestInstanceLogNeverContainsMessageContentInPanelPayload(t *testing.T) {
 
 func TestConnectionAndQueueEventsAreAudited(t *testing.T) {
 	m, store := testPolicyManager(t, Config{QueueMaxAttempts: 5})
-	m.onDisconnected("instance-1")
+	disconnectErr := errors.New("websocket: close 1006 abnormal closure")
+	m.onDisconnected("instance-1", &events.Disconnected{Remote: true, Err: disconnectErr})
 	job, created, err := m.EnqueueTextFrom("instance-1", "5565999999999", "conteúdo não auditado", "audit-key", "native_api")
 	if err != nil || !created {
 		t.Fatalf("enqueue=%#v created=%v err=%v", job, created, err)
@@ -123,6 +127,9 @@ func TestConnectionAndQueueEventsAreAudited(t *testing.T) {
 	}
 	if len(logs) != 2 || logs[0].Event != "message_enqueued" || logs[1].Event != "socket_disconnected" {
 		t.Fatalf("logs=%#v", logs)
+	}
+	if logs[1].Reason != disconnectErr.Error() || logs[1].Details["remote"] != true || logs[1].Details["errorType"] == "" {
+		t.Fatalf("disconnect cause not preserved: %#v", logs[1])
 	}
 	encoded, _ := json.Marshal(logs)
 	if strings.Contains(string(encoded), "conteúdo não auditado") {
@@ -164,6 +171,12 @@ func TestFailedSendIsAuditedWithoutMessageBody(t *testing.T) {
 	}
 	if logs[0].Event != "send_failed" || logs[1].Event != "send_attempt" {
 		t.Fatalf("unexpected send audit order: %#v", logs)
+	}
+	if logs[0].Recipient != "5565999999999" || logs[0].Reason == "" {
+		t.Fatalf("failed recipient or cause missing: %#v", logs[0])
+	}
+	if logs[0].Details["attemptedRecipient"] != "5565999999999" || logs[0].Details["errorType"] == "" {
+		t.Fatalf("failed send diagnostic details missing: %#v", logs[0].Details)
 	}
 	data, _ := json.Marshal(logs)
 	if strings.Contains(string(data), "mensagem privada") {

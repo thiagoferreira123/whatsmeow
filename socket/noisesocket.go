@@ -28,7 +28,7 @@ type NoiseSocket struct {
 	stopConsumer chan struct{}
 }
 
-type DisconnectHandler func(ctx context.Context, socket *NoiseSocket, remote bool)
+type DisconnectHandler func(ctx context.Context, socket *NoiseSocket, remote bool, err error)
 type FrameHandler func(context.Context, []byte)
 
 func newNoiseSocket(
@@ -45,8 +45,8 @@ func newNoiseSocket(
 		onFrame:      frameHandler,
 		stopConsumer: make(chan struct{}),
 	}
-	fs.OnDisconnect = func(ctx context.Context, remote bool) {
-		disconnectHandler(ctx, ns, remote)
+	fs.OnDisconnect = func(ctx context.Context, remote bool, err error) {
+		disconnectHandler(ctx, ns, remote, err)
 	}
 	go ns.consumeFrames(ctx, fs.Frames)
 	return ns, nil
