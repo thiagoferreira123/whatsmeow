@@ -51,6 +51,10 @@ diretório de execução).
 
 ## Endpoints
 
+A documentação navegável fica em **`GET /docs`**, com busca, exemplos de payload,
+respostas e referência das rotas nativas e compatíveis. A especificação para
+Postman, Insomnia e geradores de SDK está em **`GET /openapi.json`** (OpenAPI 3.1).
+
 | Método/Path | Body | Resposta |
 |---|---|---|
 | `GET /health` | — | health/version/capacidades (sem auth) |

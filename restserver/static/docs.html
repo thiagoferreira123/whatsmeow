@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="Documentação oficial da API WhatsApp DietSystem" />
+<title>WhatsApp API — Documentação</title>
+<style>
+:root{color-scheme:dark;--bg:#081116;--panel:#101b21;--panel2:#14232b;--line:#263740;--text:#eaf0f2;--muted:#91a1aa;--green:#25d366;--blue:#55a8ff;--yellow:#f4bd4f;--red:#ff7183;--code:#071015;--shadow:0 18px 60px rgba(0,0,0,.22)}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:90px}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55}a{color:inherit;text-decoration:none}button,input{font:inherit}
+.topbar{position:sticky;top:0;z-index:20;height:68px;display:flex;align-items:center;gap:13px;padding:0 24px;background:rgba(16,27,33,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(16px)}
+.brand{display:flex;align-items:center;gap:11px;font-weight:750}.logo{width:35px;height:35px;display:grid;place-items:center;border-radius:10px;background:var(--green);color:#052b15;font-weight:900}.product{font-size:14px}.product small{display:block;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.65px;text-transform:uppercase}
+.top-search{position:relative;width:min(430px,42vw);margin-left:auto}.top-search input{width:100%;padding:10px 38px 10px 13px;border:1px solid var(--line);border-radius:9px;outline:none;background:#19272e;color:var(--text)}.top-search input:focus{border-color:var(--green)}.shortcut{position:absolute;right:9px;top:8px;padding:2px 6px;border:1px solid #3a4b54;border-radius:5px;color:var(--muted);font-size:10px}
+.top-action{padding:8px 11px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:12px;font-weight:700;white-space:nowrap}.top-action:hover{color:var(--text);border-color:#425760}.top-action.primary{color:#062b16;background:var(--green);border-color:var(--green)}
+.layout{display:grid;grid-template-columns:245px minmax(0,1fr);max-width:1480px;margin:0 auto}.sidebar{position:sticky;top:68px;height:calc(100vh - 68px);overflow:auto;padding:26px 18px;border-right:1px solid var(--line)}.sidebar-title{margin:0 10px 9px;color:#63757f;font-size:10px;font-weight:800;letter-spacing:.9px;text-transform:uppercase}.side-link{display:flex;align-items:center;justify-content:space-between;margin:2px 0;padding:8px 10px;border-radius:7px;color:var(--muted);font-size:12px}.side-link:hover,.side-link.active{color:var(--text);background:var(--panel2)}.side-link.active{box-shadow:inset 2px 0 var(--green)}.count{color:#60717a;font-size:10px}
+.content{width:min(1080px,calc(100% - 48px));margin:0 auto;padding:54px 0 100px}.hero{padding:42px;border:1px solid var(--line);border-radius:20px;background:radial-gradient(circle at 85% 5%,rgba(37,211,102,.15),transparent 34%),linear-gradient(145deg,#111e25,#0d181e);box-shadow:var(--shadow)}.eyebrow{display:inline-flex;align-items:center;gap:7px;padding:5px 9px;border:1px solid rgba(37,211,102,.3);border-radius:999px;color:var(--green);background:rgba(37,211,102,.08);font-size:11px;font-weight:800;letter-spacing:.35px;text-transform:uppercase}.hero h1{max-width:760px;margin:16px 0 12px;font-size:clamp(34px,5vw,58px);line-height:1.04;letter-spacing:-2.2px}.hero p{max-width:750px;margin:0;color:#afbbc1;font-size:16px}.hero-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:25px}.button{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid var(--line);border-radius:9px;font-size:12px;font-weight:750}.button.primary{background:var(--green);border-color:var(--green);color:#062b16}.button:hover{transform:translateY(-1px)}
+.status-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}.status-card{padding:14px 16px;border:1px solid var(--line);border-radius:11px;background:rgba(8,17,22,.5)}.status-card strong{display:block;font-size:12px}.status-card span{color:var(--muted);font-size:11px}.dot{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--green)}
+.section{margin-top:58px}.section-head{display:flex;align-items:end;gap:16px;margin-bottom:18px}.section-head h2{margin:0;font-size:27px;letter-spacing:-.8px}.section-head p{max-width:650px;margin:0;color:var(--muted);font-size:13px}.section-kicker{margin-bottom:5px;color:var(--green);font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.info-card{padding:20px;border:1px solid var(--line);border-radius:13px;background:var(--panel)}.info-card h3{margin:0 0 7px;font-size:14px}.info-card p{margin:0;color:var(--muted);font-size:12px}.info-card code{color:#c6f5d8}.info-card.full{grid-column:1/-1}.callout{margin-top:14px;padding:13px 15px;border-left:3px solid var(--yellow);border-radius:4px 9px 9px 4px;background:rgba(244,189,79,.07);color:#d8d1ba;font-size:12px}
+.code-wrap{position:relative;margin-top:14px;border:1px solid #213139;border-radius:11px;overflow:hidden;background:var(--code)}.code-title{display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid #1b2b32;color:#73868f;font-size:10px;font-weight:700;text-transform:uppercase}.copy{margin-left:auto;padding:4px 8px;border:1px solid #2b3d45;border-radius:6px;background:#111d23;color:#93a4ac;cursor:pointer;font-size:10px}.copy:hover{color:var(--text);border-color:#45606b}pre{margin:0;padding:16px;overflow:auto;color:#c9d5da;font:11px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:11px 13px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}tr:last-child td{border-bottom:0}th{color:#758993;font-size:10px;letter-spacing:.55px;text-transform:uppercase}td{color:#bac5ca}td code{color:#dce9ed}
+.endpoint-group{margin-top:58px}.endpoint-group.hidden{display:none}.group-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}.group-head h2{margin:0;font-size:24px;letter-spacing:-.6px}.group-head span{padding:3px 7px;border-radius:999px;background:var(--panel2);color:var(--muted);font-size:10px}
+.endpoint{margin-bottom:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}.endpoint[open]{box-shadow:0 14px 40px rgba(0,0,0,.12)}.endpoint summary{display:grid;grid-template-columns:72px minmax(210px,auto) 1fr auto;align-items:center;gap:13px;padding:15px 17px;cursor:pointer;list-style:none}.endpoint summary::-webkit-details-marker{display:none}.method{display:inline-grid;place-items:center;width:67px;padding:4px 6px;border-radius:6px;font:800 10px ui-monospace,SFMono-Regular,Consolas,monospace}.method.GET{color:var(--blue);background:rgba(85,168,255,.11)}.method.POST{color:var(--green);background:rgba(37,211,102,.1)}.method.DELETE{color:var(--red);background:rgba(255,113,131,.1)}.path{overflow:auto;color:#dce8ec;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap}.summary{color:var(--muted);font-size:12px}.auth{padding:3px 7px;border:1px solid #30434c;border-radius:999px;color:#748891;font-size:9px;white-space:nowrap}.endpoint-body{padding:0 17px 18px 102px;border-top:1px solid var(--line)}.endpoint-description{margin:15px 0;color:#aebbc1;font-size:12px}.endpoint-meta{display:flex;flex-wrap:wrap;gap:7px}.chip{padding:4px 8px;border-radius:6px;background:#192830;color:#91a4ad;font:10px ui-monospace,SFMono-Regular,Consolas,monospace}.example-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:12px}.endpoint-note{margin:12px 0 0;color:#8f9fa7;font-size:11px}.empty-results{display:none;padding:60px 20px;text-align:center;color:var(--muted)}.footer{margin-top:70px;padding-top:22px;border-top:1px solid var(--line);color:#637780;font-size:11px}
+@media(max-width:980px){.layout{grid-template-columns:1fr}.sidebar{display:none}.content{width:min(100% - 30px,1080px)}.endpoint summary{grid-template-columns:70px 1fr auto}.summary{display:none}.example-grid{grid-template-columns:1fr}.endpoint-body{padding-left:17px}}
+@media(max-width:650px){.topbar{padding:0 13px}.product{display:none}.top-search{width:auto;flex:1}.shortcut,.top-action.spec{display:none}.content{padding-top:26px}.hero{padding:27px 22px}.hero h1{letter-spacing:-1.4px}.status-row,.grid{grid-template-columns:1fr}.endpoint summary{grid-template-columns:62px minmax(0,1fr);gap:9px}.auth{display:none}.method{width:58px}.path{font-size:10px}.section-head{display:block}.section-head p{margin-top:7px}}
+</style>
+</head>
+<body>
+<header class="topbar">
+<a class="brand" href="/"><span class="logo">W</span><span class="product">WhatsApp API<small>Developer Docs</small></span></a>
+<div class="top-search"><input id="search" type="search" placeholder="Buscar endpoint, recurso ou palavra-chave…" aria-label="Buscar na documentação" /><span class="shortcut">Ctrl K</span></div>
+<a class="top-action spec" href="/openapi.json">OpenAPI JSON</a>
+<a class="top-action primary" href="/">Abrir painel</a>
+</header>
+<div class="layout">
+<aside class="sidebar" id="sidebar">
+<p class="sidebar-title">Começar</p>
+<a class="side-link active" href="#overview">Visão geral</a>
+<a class="side-link" href="#authentication">Autenticação</a>
+<a class="side-link" href="#quickstart">Primeira chamada</a>
+<a class="side-link" href="#errors">Erros e limites</a>
+<p class="sidebar-title" style="margin-top:22px">Referência da API</p>
+<div id="groupNav"></div>
+</aside>
+<main class="content">
+<section class="hero" id="overview">
+<span class="eyebrow"><span class="dot"></span>API em produção</span>
+<h1>Integre o WhatsApp com uma API direta e observável.</h1>
+<p>Referência completa para criar e operar instâncias, gerar QR Code, enviar mensagens, acompanhar filas, webhooks e investigar cada conexão ou falha.</p>
+<div class="hero-actions"><a class="button primary" href="#quickstart">Fazer a primeira chamada</a><a class="button" href="#group-messages">Explorar endpoints</a><a class="button" href="/openapi.json">Baixar OpenAPI</a></div>
+<div class="status-row"><div class="status-card"><strong><span class="dot"></span>Base URL</strong><span id="baseUrl"></span></div><div class="status-card"><strong>Formato</strong><span>JSON UTF-8 · HTTPS</span></div><div class="status-card"><strong>Retenção de logs</strong><span>7 dias por instância</span></div></div>
+</section>
+<section class="section" id="authentication">
+<div class="section-kicker">Segurança</div><div class="section-head"><h2>Autenticação</h2><p>Há dois modelos. Nunca coloque chaves no payload ou em código publicado; carregue-as pelas variáveis de ambiente do consumidor.</p></div>
+<div class="grid">
+<article class="info-card"><h3>API nativa — Bearer</h3><p>Rotas <code>/instances/*</code>, configuração global e métricas usam <code>ADMIN_API_KEY</code>.</p><div class="code-wrap"><div class="code-title">Header<button class="copy" data-copy>Copiar</button></div><pre>Authorization: Bearer &lt;ADMIN_API_KEY&gt;</pre></div></article>
+<article class="info-card"><h3>Compatibilidade UAZAPI</h3><p>Administração usa <code>admintoken</code>. Uma instância usa o <code>token</code> retornado na criação.</p><div class="code-wrap"><div class="code-title">Headers<button class="copy" data-copy>Copiar</button></div><pre>admintoken: &lt;ADMIN_API_KEY&gt;&#10;token: &lt;INSTANCE_TOKEN&gt;</pre></div></article>
+</div>
+<div class="callout">O painel e esta documentação não expõem tokens. Os exemplos usam placeholders. Respostas de criação podem conter um token de instância: trate-o como segredo.</div>
+</section>
+<section class="section" id="quickstart">
+<div class="section-kicker">Quickstart</div><div class="section-head"><h2>Da instância ao primeiro envio</h2><p>Crie a instância, obtenha o QR Code, escaneie no WhatsApp e só então envie. A fila assíncrona aceita pedidos durante oscilações.</p></div>
+<div class="grid">
+<article class="info-card full"><h3>1. Criar uma instância</h3><div class="code-wrap"><div class="code-title">cURL<button class="copy" data-copy>Copiar</button></div><pre id="quickCreate"></pre></div></article>
+<article class="info-card"><h3>2. Gerar o QR Code</h3><p>Substitua <code>{id}</code> pelo identificador retornado. Repita até obter <code>qrcode</code> e respeite <code>expiresAt</code>.</p><div class="code-wrap"><div class="code-title">cURL<button class="copy" data-copy>Copiar</button></div><pre id="quickQR"></pre></div></article>
+<article class="info-card"><h3>3. Enviar com idempotência</h3><p>Use <code>async: true</code> e uma chave única para evitar duplicidade nos retries.</p><div class="code-wrap"><div class="code-title">cURL<button class="copy" data-copy>Copiar</button></div><pre id="quickSend"></pre></div></article>
+</div>
+</section>
+<section class="section" id="errors">
+<div class="section-kicker">Confiabilidade</div><div class="section-head"><h2>Erros, filas e limites</h2><p>Erros seguem <code>{"error":"motivo"}</code>. Falhas de envio e desconexão aparecem no histórico com causa técnica e destinatário.</p></div>
+<div class="table-wrap"><table><thead><tr><th>Status</th><th>Significado</th><th>Ação recomendada</th></tr></thead><tbody>
+<tr><td><code>200 / 201</code></td><td>Processado com sucesso.</td><td>Persista o identificador retornado.</td></tr>
+<tr><td><code>202</code></td><td>Aceito para processamento assíncrono.</td><td>Consulte a fila e mantenha a mesma chave idempotente.</td></tr>
+<tr><td><code>400 / 422</code></td><td>Payload, parâmetro ou número inválido.</td><td>Corrija a requisição; não repita sem alteração.</td></tr>
+<tr><td><code>401</code></td><td>Chave ausente ou inválida.</td><td>Verifique o header e a variável de ambiente.</td></tr>
+<tr><td><code>404</code></td><td>Recurso não encontrado.</td><td>Confira o identificador e se ele não foi removido.</td></tr>
+<tr><td><code>409</code></td><td>Sessão desconectada ou estado incompatível.</td><td>Cheque status, QR Code e logs de conexão.</td></tr>
+<tr><td><code>429</code></td><td>Limite de envio atingido.</td><td>Respeite Retry-After; a fila aplica backoff.</td></tr>
+<tr><td><code>5xx</code></td><td>Falha interna ou dependência indisponível.</td><td>Repita com backoff e idempotência; veja os logs.</td></tr>
+</tbody></table></div>
+</section>
+<div id="reference"></div>
+<div class="empty-results" id="emptyResults"><h3>Nenhum endpoint encontrado</h3><p>Tente “mensagem”, “fila”, “QR” ou o caminho da rota.</p></div>
+<footer class="footer">WhatsApp API DietSystem · <a href="/openapi.json">OpenAPI 3.1</a> · Os exemplos não contêm credenciais reais.</footer>
+</main>
+</div>
+<script>
+const groups=[
+{id:'system',name:'Sistema',description:'Saúde, métricas e configuração global.'},
+{id:'instances',name:'Instâncias',description:'Ciclo de vida, pareamento e estado das sessões.'},
+{id:'messages',name:'Mensagens e fila',description:'Envio síncrono ou persistente, mídia e acompanhamento.'},
+{id:'diagnostics',name:'Diagnóstico',description:'Logs estruturados e dados de perfil para investigação.'},
+{id:'webhooks',name:'Webhooks',description:'Eventos por instância e integração no formato Cloud API.'},
+{id:'consents',name:'Permissões locais',description:'Registro local opcional de autorização e opt-out.'},
+{id:'uazapi',name:'Compatibilidade UAZAPI',description:'Rotas compatíveis para migração sem alterar consumidores.'}
+];
+const endpoints=[
+{g:'system',m:'GET',p:'/health',s:'Verificar saúde e versão',a:'Público',d:'Retorna capacidades ativas e a versão implantada.',r:{ok:true,service:'whatsmeow-restserver',version:'docs-v1'}},
+{g:'system',m:'GET',p:'/metrics',s:'Métricas Prometheus',a:'Bearer',d:'Expõe contadores e indicadores operacionais em texto Prometheus.',r:'whatsmeow_instances 1\nwhatsmeow_connected_instances 1'},
+{g:'system',m:'GET',p:'/webhook/config',s:'Ler webhook global',a:'Bearer',d:'Retorna a integração global no formato WhatsApp Cloud API.',r:{url:'https://api.exemplo.com/webhooks/whatsapp',enabled:true,verifyToken:'***'}},
+{g:'system',m:'POST',p:'/webhook/config',s:'Configurar webhook global',a:'Bearer',d:'Salva e tenta verificar remotamente a configuração global.',b:{url:'https://api.exemplo.com/webhooks/whatsapp',verifyToken:'token-de-verificacao',appSecret:'segredo-assinatura',enabled:true},r:{ok:true,verified:true}},
+{g:'instances',m:'POST',p:'/instances',s:'Criar instância',a:'Bearer',d:'Cria uma sessão isolada. O token retornado deve ser protegido.',b:{name:'clinica-cuiaba',adminField01:'unidade-01',webhookUrl:'',webhookSecret:''},r:{id:'uuid',name:'clinica-cuiaba',status:'disconnected',token:'<INSTANCE_TOKEN>'}},
+{g:'instances',m:'GET',p:'/instances',s:'Listar instâncias',a:'Bearer',d:'Lista apenas as instâncias persistidas, com estado e perfil conhecidos.',r:[{id:'uuid',name:'clinica-cuiaba',status:'connected',owner:'5565999999999'}]},
+{g:'instances',m:'GET',p:'/instances/{id}',s:'Obter instância',a:'Bearer',d:'Retorna os metadados persistidos de uma instância.',r:{id:'uuid',name:'clinica-cuiaba',status:'connected',profileName:'Clínica'}},
+{g:'instances',m:'DELETE',p:'/instances/{id}',s:'Excluir instância e histórico',a:'Bearer',d:'Faz logout, remove a sessão, cancela a fila e apaga os logs em cascata.',r:'204 No Content',n:'Operação destrutiva e irreversível.'},
+{g:'instances',m:'GET',p:'/instances/{id}/qr',s:'Gerar ou consultar QR Code',a:'Bearer',d:'Inicia o pareamento e devolve QR como data URI.',r:{status:'connecting',qrcode:'data:image/png;base64,...',code:'2@...',expiresAt:'2026-07-10T12:00:00Z'}},
+{g:'instances',m:'GET',p:'/instances/{id}/qr.png',s:'Obter QR Code em PNG',a:'Bearer',d:'Retorna a imagem binária do QR atual; responde 409 quando indisponível.',r:'Content-Type: image/png'},
+{g:'instances',m:'GET',p:'/instances/{id}/status',s:'Consultar estado ao vivo',a:'Bearer',d:'Combina estado persistido com socket, login, fila, hibernação e bloqueios.',r:{status:'connected',connected:true,loggedIn:true,hibernated:false,queue:{pending:0}}},
+{g:'instances',m:'POST',p:'/instances/{id}/disconnect',s:'Pausar conexão (legado)',a:'Bearer',d:'Desconecta o socket preservando credenciais e sessão.',r:'204 No Content'},
+{g:'instances',m:'POST',p:'/instances/{id}/hibernate',s:'Hibernar instância',a:'Bearer',d:'Pausa intencionalmente a conexão sem perder as chaves.',r:{status:'hibernated'}},
+{g:'instances',m:'POST',p:'/instances/{id}/resume',s:'Retomar instância',a:'Bearer',d:'Solicita reconexão de uma instância hibernada.',r:{status:'connecting'}},
+{g:'instances',m:'POST',p:'/instances/{id}/reset',s:'Reiniciar runtime',a:'Bearer',d:'Recria o cliente em memória mantendo sessão e fila; possui cooldown.',r:{status:'connecting',queuedRecovered:0}},
+{g:'messages',m:'POST',p:'/instances/{id}/send/text',s:'Enviar texto',a:'Bearer',d:'Envia imediatamente ou grava na fila persistente.',q:'?async=true',b:{number:'5565999999999',text:'Olá! Sua consulta está confirmada.',async:true,idempotencyKey:'consulta-9281'},r:{id:'job-ou-message-id',status:'queued',created:true}},
+{g:'messages',m:'POST',p:'/instances/{id}/send/media',s:'Enviar mídia',a:'Bearer',d:'Aceita URL, base64 ou data URI em JSON; também aceita multipart síncrono.',b:{number:'5565999999999',type:'image',file:'https://cdn.exemplo.com/imagem.jpg',text:'Seu arquivo',fileName:'imagem.jpg',async:true},r:{id:'job-ou-message-id',status:'queued'}},
+{g:'messages',m:'GET',p:'/instances/{id}/queue',s:'Consultar fila',a:'Bearer',d:'Retorna resumo, prontidão da sessão e jobs recentes.',q:'?status=queued&limit=50',r:{summary:{pending:2},sessionReady:true,jobs:[{id:'job-id',status:'queued',kind:'text'}]}},
+{g:'messages',m:'DELETE',p:'/instances/{id}/queue',s:'Cancelar fila pendente',a:'Bearer',d:'Cancela jobs ainda não enviados e registra a ação no histórico.',r:{canceled:2}},
+{g:'diagnostics',m:'GET',p:'/instances/{id}/logs',s:'Listar histórico estruturado',a:'Bearer',d:'Eventos de conexão, envio, fila e sistema, com causas e destinatários.',q:'?category=send&level=error&limit=100&before=123',r:{logs:[{event:'send_failed',level:'error',recipient:'5565999999999',reason:'instance is not connected/logged in',details:{attemptedRecipient:'5565999999999',errorType:'*main.apiError'}}],nextBefore:122,retentionDays:7}},
+{g:'diagnostics',m:'GET',p:'/instances/{id}/profile',s:'Perfil da conta conectada',a:'Bearer',d:'Atualiza e retorna nome, foto e dados públicos do proprietário.',r:{owner:'5565999999999',profileName:'Clínica',profilePicUrl:'https://...'}},
+{g:'diagnostics',m:'GET',p:'/instances/{id}/contact',s:'Consultar contato',a:'Bearer',d:'Resolve um número e retorna os dados disponíveis.',q:'?number=5565999999999',r:{number:'5565999999999',exists:true,name:'Contato'}},
+{g:'webhooks',m:'POST',p:'/instances/{id}/webhook',s:'Configurar webhook da instância',a:'Bearer',d:'Define URL, assinatura e filtro de eventos para uma instância.',b:{url:'https://api.exemplo.com/webhooks/uazapi',secret:'segredo',events:'messages,connection',enabled:true},r:{ok:true}},
+{g:'webhooks',m:'GET',p:'/webhook',s:'Handshake Cloud API',a:'Público',d:'Valida hub.mode, hub.verify_token e devolve hub.challenge.',q:'?hub.mode=subscribe&hub.verify_token=TOKEN&hub.challenge=123',r:'123'},
+{g:'consents',m:'GET',p:'/instances/{id}/consents/{number}',s:'Consultar permissão local',a:'Bearer',d:'Consulta o registro local; não representa permissão oficial da Meta.',r:{recipient:'5565999999999',status:'granted',source:'crm'}},
+{g:'consents',m:'POST',p:'/instances/{id}/consents',s:'Registrar permissão local',a:'Bearer',d:'Grava consentimento no controle local quando essa política é usada.',b:{number:'5565999999999',source:'formulario-site'},r:{recipient:'5565999999999',status:'granted'}},
+{g:'consents',m:'POST',p:'/instances/{id}/consents/revoke',s:'Revogar permissão local',a:'Bearer',d:'Registra opt-out local, que prevalece sobre permissões anteriores.',b:{number:'5565999999999',source:'solicitacao-cliente'},r:{recipient:'5565999999999',status:'revoked'}},
+{g:'uazapi',m:'POST',p:'/instance/init',s:'Criar instância compatível',a:'admintoken',d:'Cria instância no formato esperado por consumidores UAZAPI.',b:{name:'clinica-cuiaba',adminField01:'unidade-01',systemName:'DietSystem'},r:{instance:{id:'uuid',status:'disconnected'},token:'<INSTANCE_TOKEN>'}},
+{g:'uazapi',m:'POST',p:'/instance/connect',s:'Gerar QR compatível',a:'token',d:'Inicia pareamento e inclui qrcode no objeto instance.',r:{instance:{status:'connecting',qrcode:'data:image/png;base64,...'}}},
+{g:'uazapi',m:'GET',p:'/instance/status',s:'Status compatível',a:'token',d:'Retorna estado da sessão no formato UAZAPI.',r:{instance:{id:'uuid',status:'connected',connected:true,loggedIn:true}}},
+{g:'uazapi',m:'GET',p:'/instance/all',s:'Listar instâncias compatíveis',a:'admintoken',d:'Lista todas as instâncias no formato UAZAPI.',r:[{id:'uuid',name:'clinica-cuiaba',status:'connected'}]},
+{g:'uazapi',m:'POST',p:'/instance/disconnect',s:'Desconectar compatível',a:'token',d:'Hiberna a sessão preservando credenciais.',r:{status:'hibernated'}},
+{g:'uazapi',m:'POST',p:'/instance/hibernate',s:'Hibernar compatível',a:'token',d:'Alias compatível para desconexão controlada.',r:{status:'hibernated'}},
+{g:'uazapi',m:'POST',p:'/instance/resume',s:'Retomar compatível',a:'token',d:'Retoma a conexão em background.',r:{status:'connecting'}},
+{g:'uazapi',m:'POST',p:'/instance/reset',s:'Reset compatível',a:'token',d:'Reinicia o runtime sem apagar credenciais.',r:{status:'connecting'}},
+{g:'uazapi',m:'DELETE',p:'/instance',s:'Excluir compatível',a:'token',d:'Exclui completamente a instância associada ao token.',r:{status:'deleted'}},
+{g:'uazapi',m:'POST',p:'/webhook',s:'Webhook compatível',a:'token',d:'Configura entrega de eventos no formato UAZAPI.',b:{url:'https://api.exemplo.com/webhooks/uazapi',enabled:true,events:['messages','connection']},r:[{url:'https://api.exemplo.com/webhooks/uazapi',enabled:true}]},
+{g:'uazapi',m:'POST',p:'/send/text',s:'Enviar texto compatível',a:'token',d:'Envio síncrono ou assíncrono usando o token da instância.',b:{number:'5565999999999',text:'Olá!',async:true,idempotencyKey:'pedido-9281'},r:{id:'job-id',status:'queued',created:true}},
+{g:'uazapi',m:'POST',p:'/send/media',s:'Enviar mídia compatível',a:'token',d:'Envia mídia por URL/base64; docName define o documento.',b:{number:'5565999999999',type:'document',file:'https://cdn.exemplo.com/arquivo.pdf',text:'Documento',docName:'arquivo.pdf',async:true},r:{id:'job-id',status:'queued'}},
+{g:'uazapi',m:'GET',p:'/message/async',s:'Status da fila compatível',a:'token',d:'Resume fila, conexão e capacidade de aceitar mensagens.',r:{status:'queued',pending:2,sessionReady:true,processingNow:false,acceptingNewMessages:true}},
+{g:'uazapi',m:'DELETE',p:'/message/async',s:'Limpar fila compatível',a:'token',d:'Cancela jobs pendentes da instância autenticada.',r:{canceled:2}}
+];
+const base=location.origin;
+document.querySelector('#baseUrl').textContent=base;
+const continuation=' '+String.fromCharCode(92)+'\n';
+document.querySelector('#quickCreate').textContent=[`curl -X POST "${base}/instances"`,'  -H "Authorization: Bearer <ADMIN_API_KEY>"','  -H "Content-Type: application/json"','  -d \'{"name":"clinica-cuiaba","adminField01":"unidade-01"}\''].join(continuation);
+document.querySelector('#quickQR').textContent=[`curl "${base}/instances/{id}/qr"`,'  -H "Authorization: Bearer <ADMIN_API_KEY>"'].join(continuation);
+document.querySelector('#quickSend').textContent=[`curl -X POST "${base}/instances/{id}/send/text"`,'  -H "Authorization: Bearer <ADMIN_API_KEY>"','  -H "Idempotency-Key: pedido-9281"','  -H "Content-Type: application/json"','  -d \'{"number":"5565999999999","text":"Olá!","async":true}\''].join(continuation);
+function json(value){return typeof value==='string'?value:JSON.stringify(value,null,2)}
+function authHeader(auth){if(auth==='Bearer')return '-H "Authorization: Bearer <ADMIN_API_KEY>"';if(auth==='admintoken')return '-H "admintoken: <ADMIN_API_KEY>"';if(auth==='token')return '-H "token: <INSTANCE_TOKEN>"';return ''}
+function curlFor(e){const lines=[`curl -X ${e.m} "${base}${e.p}${e.q||''}"`];const auth=authHeader(e.a);if(auth)lines.push(`  ${auth}`);if(e.b){lines.push('  -H "Content-Type: application/json"');lines.push(`  -d '${JSON.stringify(e.b,null,2)}'`)}return lines.join(continuation)}
+function escapeHTML(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function codeBlock(title,content){return `<div class="code-wrap"><div class="code-title">${escapeHTML(title)}<button class="copy" data-copy>Copiar</button></div><pre>${escapeHTML(content)}</pre></div>`}
+function renderReference(){
+const nav=document.querySelector('#groupNav');const reference=document.querySelector('#reference');
+nav.innerHTML=groups.map(g=>`<a class="side-link" href="#group-${g.id}">${g.name}<span class="count">${endpoints.filter(e=>e.g===g.id).length}</span></a>`).join('');
+reference.innerHTML=groups.map(g=>{const items=endpoints.filter(e=>e.g===g.id);return `<section class="endpoint-group" id="group-${g.id}"><div class="section-kicker">Referência</div><div class="group-head"><h2>${g.name}</h2><span>${items.length} endpoints</span></div><p style="margin:-6px 0 18px;color:var(--muted);font-size:12px">${g.description}</p>${items.map((e,i)=>`<details class="endpoint" data-search="${escapeHTML(`${e.m} ${e.p} ${e.s} ${e.d} ${g.name}`.toLowerCase())}" ${g.id==='instances'&&i===0?'open':''}><summary><span class="method ${e.m}">${e.m}</span><span class="path">${escapeHTML(e.p)}</span><span class="summary">${escapeHTML(e.s)}</span><span class="auth">${escapeHTML(e.a)}</span></summary><div class="endpoint-body"><p class="endpoint-description">${escapeHTML(e.d)}</p><div class="endpoint-meta">${e.q?`<span class="chip">query ${escapeHTML(e.q)}</span>`:''}<span class="chip">auth ${escapeHTML(e.a)}</span>${e.m==='POST'?'<span class="chip">application/json</span>':''}</div><div class="example-grid">${codeBlock('Requisição cURL',curlFor(e))}${codeBlock('Resposta de exemplo',json(e.r))}</div>${e.n?`<p class="endpoint-note">⚠ ${escapeHTML(e.n)}</p>`:''}</div></details>`).join('')}</section>`}).join('');bindCopyButtons()}
+function bindCopyButtons(){document.querySelectorAll('[data-copy]').forEach(button=>{if(button.dataset.ready)return;button.dataset.ready='1';button.addEventListener('click',async()=>{const value=button.closest('.code-wrap').querySelector('pre').innerText;await navigator.clipboard.writeText(value);const old=button.textContent;button.textContent='Copiado';setTimeout(()=>button.textContent=old,1200)})})}
+function filterEndpoints(query){const needle=query.trim().toLowerCase();let visible=0;document.querySelectorAll('.endpoint').forEach(card=>{const match=!needle||card.dataset.search.includes(needle);card.hidden=!match;if(match)visible++});document.querySelectorAll('.endpoint-group').forEach(group=>group.classList.toggle('hidden',![...group.querySelectorAll('.endpoint')].some(card=>!card.hidden)));document.querySelector('#emptyResults').style.display=visible?'none':'block'}
+renderReference();bindCopyButtons();
+const search=document.querySelector('#search');search.addEventListener('input',()=>filterEndpoints(search.value));document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();search.focus()}});
+const observer=new IntersectionObserver(entries=>{const active=entries.filter(e=>e.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];if(!active)return;document.querySelectorAll('.side-link').forEach(link=>link.classList.toggle('active',link.getAttribute('href')===`#${active.target.id}`))},{rootMargin:'-80px 0px -65% 0px',threshold:[0,.2,.6]});
+document.querySelectorAll('main section[id]').forEach(section=>observer.observe(section));
+</script>
+</body>
+</html>

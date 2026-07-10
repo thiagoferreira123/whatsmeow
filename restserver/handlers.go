@@ -24,7 +24,7 @@ type Handlers struct {
 	cfg Config
 }
 
-const serviceVersion = "audit-v4-diagnostics"
+const serviceVersion = "docs-v1"
 
 func NewHandlers(mgr *Manager, cfg Config) *Handlers {
 	return &Handlers{mgr: mgr, cfg: cfg}
@@ -36,6 +36,8 @@ func (h *Handlers) Router() http.Handler {
 	// Management UI (served same-origin so the browser has no CORS issues).
 	mux.HandleFunc("GET /{$}", h.serveUI)
 	mux.HandleFunc("GET /ui", h.serveUI)
+	mux.HandleFunc("GET /docs", h.serveDocs)
+	mux.HandleFunc("GET /openapi.json", h.serveOpenAPI)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -88,7 +90,7 @@ func (h *Handlers) Router() http.Handler {
 // withAuth checks a global API key unless ADMIN_API_KEY is empty. /health is open.
 func (h *Handlers) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.cfg.AdminAPIKey == "" || r.URL.Path == "/health" || r.URL.Path == "/" || r.URL.Path == "/ui" || r.URL.Path == "/webhook" || isUazapiCompatPath(r.URL.Path) {
+		if h.cfg.AdminAPIKey == "" || r.URL.Path == "/health" || r.URL.Path == "/" || r.URL.Path == "/ui" || r.URL.Path == "/docs" || r.URL.Path == "/openapi.json" || r.URL.Path == "/webhook" || isUazapiCompatPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
