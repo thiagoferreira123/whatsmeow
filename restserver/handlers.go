@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -10,8 +11,9 @@ import (
 
 // apiError is an error carrying an HTTP status code.
 type apiError struct {
-	Status int
-	Msg    string
+	Status     int
+	Msg        string
+	RetryAfter int
 }
 
 func (e *apiError) Error() string { return e.Msg }
@@ -52,6 +54,9 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("GET /instances/{id}/contact", h.getContact)
 	mux.HandleFunc("POST /instances/{id}/send/text", h.sendText)
 	mux.HandleFunc("POST /instances/{id}/send/media", h.sendMedia)
+	mux.HandleFunc("GET /instances/{id}/consents/{number}", h.getConsent)
+	mux.HandleFunc("POST /instances/{id}/consents", h.grantConsent)
+	mux.HandleFunc("POST /instances/{id}/consents/revoke", h.revokeConsent)
 	mux.HandleFunc("POST /instances/{id}/webhook", h.setWebhook)
 	mux.HandleFunc("POST /instances/{id}/disconnect", h.disconnect)
 
@@ -306,6 +311,44 @@ func (h *Handlers) sendMediaUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "sent"})
 }
 
+func (h *Handlers) getConsent(w http.ResponseWriter, r *http.Request) {
+	p, err := h.mgr.GetConsent(r.PathValue("id"), r.PathValue("number"))
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (h *Handlers) grantConsent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Number string `json:"number"`
+		Source string `json:"source"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	p, err := h.mgr.GrantConsent(r.PathValue("id"), body.Number, body.Source)
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (h *Handlers) revokeConsent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Number string `json:"number"`
+		Source string `json:"source"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	p, err := h.mgr.RevokeConsent(r.PathValue("id"), body.Number, body.Source)
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
 func (h *Handlers) setWebhook(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		URL     string `json:"url"`
@@ -364,6 +407,9 @@ func handleErr(w http.ResponseWriter, err error) bool {
 	}
 	var ae *apiError
 	if errors.As(err, &ae) {
+		if ae.RetryAfter > 0 {
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", ae.RetryAfter))
+		}
 		writeErr(w, ae.Status, ae.Msg)
 		return true
 	}

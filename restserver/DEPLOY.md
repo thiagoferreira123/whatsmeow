@@ -24,3 +24,9 @@ Serviço "WhatsApp" (whatsmeow/restserver) em produção, **isolado**, na EC2/Co
 - **DNS:** `zap.dietsystem.com.br` A → `54.207.254.146` (DigitalOcean); TLS Let's Encrypt automático (Traefik/Coolify).
 
 Redeploy manual: `GET https://coolify.dietsystem.com.br/api/v1/deploy?uuid=ww1t3zwj4d1q00ez6ur0d0oe` (Bearer COOLIFY_API_TOKEN).
+
+## Política de saída
+
+Cadência, consentimento, opt-out e rollout isolado estão em
+[`OUTBOUND_SAFETY.md`](OUTBOUND_SAFETY.md). Essas variáveis pertencem somente ao app
+`whatsapp-zap`; não criar proxy nem variáveis de rede globais no host Coolify.

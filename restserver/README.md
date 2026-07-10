@@ -34,6 +34,12 @@ diretório de execução).
 | `AUTOREPLY_ENABLED` | `true` | liga a auto-resposta embutida de confirmação 1/2 |
 | `AUTOREPLY_CONFIRM_MSG` | ✅ Sua consulta foi confirmada! Até breve. | resposta ao `1` |
 | `AUTOREPLY_CANCEL_MSG` | ❌ Sua consulta foi cancelada... | resposta ao `2` |
+| `SEND_RATE_PER_MINUTE` | `30` | cadência sustentada máxima por instância (`0` desliga) |
+| `SEND_BURST` | `5` | rajada curta máxima por instância |
+| `SEND_RECIPIENT_COOLDOWN_SECONDS` | `10` | intervalo mínimo entre mensagens para o mesmo destinatário |
+| `SEND_RECIPIENT_DAILY_MAX` | `20` | teto móvel de 24h por instância/destinatário (`0` desliga) |
+| `SEND_REQUIRE_LOCAL_CONSENT` | `false` | exige registro local de consentimento ou mensagem recebida dentro da janela de atendimento |
+| `SEND_SERVICE_WINDOW_HOURS` | `24` | duração da janela aberta por uma mensagem recebida |
 
 ## Endpoints
 
@@ -46,9 +52,12 @@ diretório de execução).
 | `DELETE /instances/{id}` | — | `204` (logout + remove sessão e row) |
 | `GET /instances/{id}/qr` | — | `{status, qrcode:"data:image/png;base64,…", code, expiresAt}` |
 | `GET /instances/{id}/qr.png` | — | imagem PNG do QR (abrir no navegador p/ escanear) |
-| `GET /instances/{id}/status` | — | `{status, loggedIn, connected, owner, profileName}` |
+| `GET /instances/{id}/status` | — | `{status, loggedIn, connected, owner, profileName, sendingBlockedUntil}` |
 | `POST /instances/{id}/send/text` | `{number, text}` | `{id, status}` |
 | `POST /instances/{id}/send/media` | **JSON:** `{number, type?, file:URL\|base64\|dataURI, text?, fileName?}` · **ou upload:** `multipart/form-data` com campo `file` (+ `number`, `type?`, `text?`, `fileName?`) | `{id, status}` |
+| `GET /instances/{id}/consents/{number}` | — | registro local atual do destinatário |
+| `POST /instances/{id}/consents` | `{number, source}` | registra localmente o consentimento e sua origem auditável |
+| `POST /instances/{id}/consents/revoke` | `{number, source?}` | revoga e bloqueia novos envios |
 | `POST /instances/{id}/webhook` | `{url, secret?, events?, enabled?}` | `{ok:true}` |
 | `POST /instances/{id}/disconnect` | — | `204` (fecha socket, mantém sessão) |
 
@@ -57,6 +66,16 @@ com ou sem formatação) ou JID completo (`...@s.whatsapp.net`). O número é **
 `IsOnWhatsApp`** (o servidor do WhatsApp devolve o JID canônico), tratando a regra do **9º dígito**
 brasileiro automaticamente — testa as variantes com/sem o `9`. Número não registrado → `422`.
 `type` é opcional no envio de mídia (vazio = inferido do mime do arquivo).
+
+Todos os caminhos de envio, inclusive a compatibilidade uazapi e a auto-resposta 1/2,
+passam pela mesma política de saída. Ao atingir a cadência ou o teto de 24h, a API
+responde `429` com `Retry-After`. Uma revogação responde `403`. Mensagens recebidas com
+`STOP`, `SAIR`, `PARAR`, `REMOVER` ou `DESCADASTRAR` gravam opt-out automaticamente.
+Veja [OUTBOUND_SAFETY.md](OUTBOUND_SAFETY.md) para o rollout no Coolify.
+
+> O registro de consentimento é interno deste serviço. `whatsmeow` não oferece uma API
+> para consultar uma autorização reconhecida pelo WhatsApp/Meta. Por isso o enforcement
+> local é opcional e vem desligado por padrão.
 
 ## Teste rápido (PowerShell)
 

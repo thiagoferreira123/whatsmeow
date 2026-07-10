@@ -64,8 +64,9 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("whatsmeow REST server listening on :%s (auth=%v autoreply=%v watchdog=%ds connectConcurrency=%d)",
-		cfg.Port, cfg.AdminAPIKey != "", cfg.AutoReplyEnabled, cfg.WatchdogSeconds, cfg.ConnectConcurrency)
+	log.Printf("whatsmeow REST server listening on :%s (auth=%v autoreply=%v watchdog=%ds connectConcurrency=%d sendRate=%d/min burst=%d consent=%v)",
+		cfg.Port, cfg.AdminAPIKey != "", cfg.AutoReplyEnabled, cfg.WatchdogSeconds, cfg.ConnectConcurrency,
+		cfg.SendRatePerMinute, cfg.SendBurst, cfg.RequireLocalConsent)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

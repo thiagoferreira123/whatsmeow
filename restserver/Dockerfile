@@ -19,6 +19,12 @@ COPY --from=build /out/restserver /app/restserver
 # as instâncias de uma vez — a EC2 é compartilhada com o prod (DietSystem/Pulso).
 ENV PORT=8080 \
     GOMEMLIMIT=1750MiB \
+    SEND_RATE_PER_MINUTE=30 \
+    SEND_BURST=5 \
+    SEND_RECIPIENT_COOLDOWN_SECONDS=10 \
+    SEND_RECIPIENT_DAILY_MAX=20 \
+    SEND_SERVICE_WINDOW_HOURS=24 \
+    SEND_REQUIRE_LOCAL_CONSENT=false \
     WHATSMEOW_DSN="file:/data/whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 EXPOSE 8080
 VOLUME ["/data"]

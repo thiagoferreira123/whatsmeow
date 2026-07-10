@@ -4,18 +4,27 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	"google.golang.org/protobuf/proto"
 )
 
 // intentRe matches a confirmation reply: the first non-space char is 1 or 2,
 // not immediately followed by another digit (so "10"/"12" are rejected but
 // "1", " 2 ", "1.", "2) ok" are accepted).
 var intentRe = regexp.MustCompile(`^\s*([12])(\D|$)`)
+
+var optOutWords = map[string]struct{}{
+	"stop": {}, "sair": {}, "parar": {}, "remover": {}, "descadastrar": {},
+}
+
+func isOptOut(text string) bool {
+	_, ok := optOutWords[strings.ToLower(strings.TrimSpace(text))]
+	return ok
+}
 
 func parseIntent(text string) string {
 	mt := intentRe.FindStringSubmatch(text)
@@ -76,6 +85,27 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 	if !m.webhooks.dedup(v.Info.ID) {
 		return
 	}
+	// Any inbound direct message opens the configured service window. Explicit
+	// stop words persist a suppression that wins over that window and over the
+	// SEND_REQUIRE_LOCAL_CONSENT setting.
+	senderPN, _ := resolveSender(v.Info)
+	permissionKeys := map[string]struct{}{}
+	for _, raw := range []string{senderPN, v.Info.Sender.User, v.Info.Chat.User} {
+		if key := permissionKey(raw); key != "" {
+			permissionKeys[key] = struct{}{}
+		}
+	}
+	for key := range permissionKeys {
+		var err error
+		if isOptOut(text) {
+			err = m.store.RevokeRecipientConsent(instanceID, key, "inbound_opt_out", time.Now())
+		} else {
+			err = m.store.RecordInbound(instanceID, key, time.Now())
+		}
+		if err != nil {
+			m.log.Warnf("instance %s: failed to persist recipient permission: %v", instanceID, err)
+		}
+	}
 	intent := parseIntent(text)
 
 	// Built-in 1/2 appointment-confirmation auto-reply. Sent in the background
@@ -86,7 +116,9 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 			reply = m.cfg.AutoReplyCancel
 		}
 		go func(chat types.JID) {
-			_, _ = rt.client.SendMessage(context.Background(), chat, &waE2E.Message{Conversation: proto.String(reply)})
+			if _, err := m.sendTextJID(context.Background(), instanceID, chat, reply); err != nil {
+				m.log.Warnf("instance %s: auto-reply blocked or failed: %v", instanceID, err)
+			}
 		}(v.Info.Chat)
 	}
 
@@ -282,10 +314,12 @@ func (m *Manager) onTemporaryBan(instanceID string, v *events.TemporaryBan) {
 		wait = 30 * time.Minute
 	}
 	m.log.Warnf("instance %s: TEMPORARY BAN (%s) — backing off reconnect for %s", instanceID, v.String(), wait)
+	blockedUntil := time.Now().Add(wait)
 	rt.mu.Lock()
 	rt.meta.Status = "disconnected"
 	rt.meta.LastDisconnectReason = "temp_banned: " + v.String()
-	rt.nextConnectAt = time.Now().Add(wait)
+	rt.meta.SendingBlockedUntil = blockedUntil.UTC().Format(time.RFC3339)
+	rt.nextConnectAt = blockedUntil
 	in := rt.meta
 	rt.mu.Unlock()
 	_ = m.store.Save(&in)

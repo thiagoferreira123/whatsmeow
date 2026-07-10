@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +32,7 @@ type Instance struct {
 	CreatedAt            string `json:"createdAt"`
 	UpdatedAt            string `json:"updatedAt"`
 	LastDisconnectReason string `json:"lastDisconnectReason,omitempty"`
+	SendingBlockedUntil  string `json:"sendingBlockedUntil,omitempty"`
 }
 
 const schemaSQL = `
@@ -51,12 +53,40 @@ CREATE TABLE IF NOT EXISTS instances (
 	owner                  TEXT NOT NULL DEFAULT '',
 	created_at             TEXT NOT NULL,
 	updated_at             TEXT NOT NULL,
-	last_disconnect_reason TEXT NOT NULL DEFAULT ''
-);`
+	last_disconnect_reason TEXT NOT NULL DEFAULT '',
+	sending_blocked_until  TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS recipient_permissions (
+	instance_id    TEXT NOT NULL,
+	recipient      TEXT NOT NULL,
+	status         TEXT NOT NULL DEFAULT 'unknown',
+	source         TEXT NOT NULL DEFAULT '',
+	consented_at   TEXT NOT NULL DEFAULT '',
+	revoked_at     TEXT NOT NULL DEFAULT '',
+	last_inbound_at TEXT NOT NULL DEFAULT '',
+	updated_at     TEXT NOT NULL,
+	PRIMARY KEY (instance_id, recipient),
+	FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS outbound_activity (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	instance_id TEXT NOT NULL,
+	recipient   TEXT NOT NULL,
+	sent_at     TEXT NOT NULL,
+	FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS outbound_activity_recipient_time
+	ON outbound_activity(instance_id, recipient, sent_at);
+CREATE INDEX IF NOT EXISTS outbound_activity_time ON outbound_activity(sent_at);`
 
 // Store is a thin CRUD layer over the instances table. It shares the same
 // *sql.DB as whatsmeow's sqlstore container (same SQLite file).
-type Store struct{ db *sql.DB }
+type Store struct {
+	db             *sql.DB
+	outboundWrites atomic.Uint64
+}
 
 func NewStore(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
@@ -66,6 +96,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 	for _, alter := range []string{
 		`ALTER TABLE instances ADD COLUMN profile_pic_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE instances ADD COLUMN is_business INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE instances ADD COLUMN sending_blocked_until TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(alter)
 	}
@@ -92,7 +123,7 @@ func (s *Store) SetSetting(key, val string) error {
 	return err
 }
 
-const instanceCols = `id,name,jid,token,admin_field01,webhook_url,webhook_secret,webhook_events,webhook_enabled,status,profile_name,profile_pic_url,is_business,owner,created_at,updated_at,last_disconnect_reason`
+const instanceCols = `id,name,jid,token,admin_field01,webhook_url,webhook_secret,webhook_events,webhook_enabled,status,profile_name,profile_pic_url,is_business,owner,created_at,updated_at,last_disconnect_reason,sending_blocked_until`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -103,7 +134,7 @@ func scanInstance(s rowScanner) (Instance, error) {
 		&in.ID, &in.Name, &in.JID, &in.Token, &in.AdminField01,
 		&in.WebhookURL, &in.WebhookSecret, &in.WebhookEvents, &enabled,
 		&in.Status, &in.ProfileName, &in.ProfilePicUrl, &business, &in.Owner,
-		&in.CreatedAt, &in.UpdatedAt, &in.LastDisconnectReason,
+		&in.CreatedAt, &in.UpdatedAt, &in.LastDisconnectReason, &in.SendingBlockedUntil,
 	)
 	in.WebhookEnabled = enabled != 0
 	in.IsBusiness = business != 0
@@ -112,11 +143,11 @@ func scanInstance(s rowScanner) (Instance, error) {
 
 func (s *Store) Create(in *Instance) error {
 	_, err := s.db.Exec(
-		`INSERT INTO instances (`+instanceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO instances (`+instanceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		in.ID, in.Name, in.JID, in.Token, in.AdminField01,
 		in.WebhookURL, in.WebhookSecret, in.WebhookEvents, b2i(in.WebhookEnabled),
 		in.Status, in.ProfileName, in.ProfilePicUrl, b2i(in.IsBusiness), in.Owner,
-		in.CreatedAt, in.UpdatedAt, in.LastDisconnectReason,
+		in.CreatedAt, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil,
 	)
 	return err
 }
@@ -125,10 +156,10 @@ func (s *Store) Create(in *Instance) error {
 func (s *Store) Save(in *Instance) error {
 	in.UpdatedAt = nowRFC()
 	_, err := s.db.Exec(
-		`UPDATE instances SET name=?,jid=?,token=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_enabled=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=? WHERE id=?`,
+		`UPDATE instances SET name=?,jid=?,token=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_enabled=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=?,sending_blocked_until=? WHERE id=?`,
 		in.Name, in.JID, in.Token, in.AdminField01, in.WebhookURL, in.WebhookSecret,
 		in.WebhookEvents, b2i(in.WebhookEnabled), in.Status, in.ProfileName, in.ProfilePicUrl,
-		b2i(in.IsBusiness), in.Owner, in.UpdatedAt, in.LastDisconnectReason, in.ID,
+		b2i(in.IsBusiness), in.Owner, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.ID,
 	)
 	return err
 }

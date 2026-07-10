@@ -49,6 +49,7 @@ type Manager struct {
 	store     *Store
 	cfg       Config
 	webhooks  *WebhookSender
+	outbound  *outboundGuard
 	log       waLog.Logger
 
 	// connectSem bounds simultaneous Connect() attempts (boot + watchdog) so
@@ -73,6 +74,7 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 		store:      store,
 		cfg:        cfg,
 		webhooks:   NewWebhookSender(),
+		outbound:   newOutboundGuard(cfg),
 		log:        log,
 		connectSem: make(chan struct{}, conc),
 		jidCache:   make(map[string]jidCacheEntry),
@@ -310,14 +312,15 @@ func (m *Manager) StatusDetail(id string) (map[string]any, error) {
 		owner = cli.Store.ID.User
 	}
 	return map[string]any{
-		"id":            id,
-		"status":        m.statusOf(rt),
-		"loggedIn":      loggedIn,
-		"connected":     cli != nil && cli.IsConnected(),
-		"owner":         owner,
-		"profileName":   in.ProfileName,
-		"profilePicUrl": in.ProfilePicUrl,
-		"isBusiness":    in.IsBusiness,
+		"id":                  id,
+		"status":              m.statusOf(rt),
+		"loggedIn":            loggedIn,
+		"connected":           cli != nil && cli.IsConnected(),
+		"owner":               owner,
+		"profileName":         in.ProfileName,
+		"profilePicUrl":       in.ProfilePicUrl,
+		"isBusiness":          in.IsBusiness,
+		"sendingBlockedUntil": in.SendingBlockedUntil,
 	}, nil
 }
 
@@ -575,11 +578,39 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (string
 	if err != nil {
 		return "", err
 	}
+	recipient := permissionKey(jid.User)
+	if err := m.checkOutbound(ctx, id, recipient); err != nil {
+		return "", err
+	}
 	resp, err := rt.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
 	if err != nil {
 		return "", err
 	}
+	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
+		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
+	}
 	m.log.Infof("sent text to %s (msg %s)", jid, resp.ID)
+	return resp.ID, nil
+}
+
+// sendTextJID sends a reply to an already-known chat while applying the same
+// outbound policy as REST-initiated messages.
+func (m *Manager) sendTextJID(ctx context.Context, id string, jid types.JID, text string) (string, error) {
+	rt, err := m.requireLoggedIn(id)
+	if err != nil {
+		return "", err
+	}
+	recipient := permissionKey(jid.User)
+	if err := m.checkOutbound(ctx, id, recipient); err != nil {
+		return "", err
+	}
+	resp, err := rt.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
+	if err != nil {
+		return "", err
+	}
+	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
+		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
+	}
 	return resp.ID, nil
 }
 
@@ -593,6 +624,10 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 	if err != nil {
 		return "", err
 	}
+	recipient := permissionKey(jid.User)
+	if err := m.checkOutbound(ctx, id, recipient); err != nil {
+		return "", err
+	}
 	msg, err := buildMediaMessage(ctx, rt.client, mediaType, file, caption, fileName)
 	if err != nil {
 		return "", err
@@ -600,6 +635,9 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 	resp, err := rt.client.SendMessage(ctx, jid, msg)
 	if err != nil {
 		return "", err
+	}
+	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
+		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
 	}
 	m.log.Infof("sent %s to %s (msg %s)", mediaType, jid, resp.ID)
 	return resp.ID, nil
@@ -615,6 +653,10 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 	if err != nil {
 		return "", err
 	}
+	recipient := permissionKey(jid.User)
+	if err := m.checkOutbound(ctx, id, recipient); err != nil {
+		return "", err
+	}
 	msg, err := buildMediaMessageBytes(ctx, rt.client, mediaType, data, mime, caption, fileName)
 	if err != nil {
 		return "", err
@@ -622,6 +664,9 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 	resp, err := rt.client.SendMessage(ctx, jid, msg)
 	if err != nil {
 		return "", err
+	}
+	if err := m.store.RecordOutbound(id, recipient, time.Now()); err != nil {
+		m.log.Warnf("failed to audit outbound message %s: %v", resp.ID, err)
 	}
 	m.log.Infof("sent uploaded %s to %s (msg %s)", mediaType, jid, resp.ID)
 	return resp.ID, nil
