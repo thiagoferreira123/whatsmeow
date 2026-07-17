@@ -1,9 +1,13 @@
 package main
 
 import (
+	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // uazapi wire-compat layer: lets the DietSystem backend treat this service as a
@@ -62,6 +66,8 @@ func (h *Handlers) registerUazapiCompat(mux *http.ServeMux) {
 	mux.HandleFunc("POST /send/media", h.uzSendMedia)
 	mux.HandleFunc("GET /message/async", h.uzAsyncQueue)
 	mux.HandleFunc("DELETE /message/async", h.uzClearAsyncQueue)
+	mux.HandleFunc("POST /sender/advanced", h.uzSenderAdvanced)
+	mux.HandleFunc("GET /sender/listfolders", h.uzSenderListFolders)
 }
 
 // isUazapiCompatPath: these endpoints do their own admintoken/token auth, so they
@@ -70,7 +76,7 @@ func isUazapiCompatPath(p string) bool {
 	if p == "/instance" || p == "/webhook" {
 		return true
 	}
-	return strings.HasPrefix(p, "/instance/") || strings.HasPrefix(p, "/send/") || strings.HasPrefix(p, "/message/")
+	return strings.HasPrefix(p, "/instance/") || strings.HasPrefix(p, "/send/") || strings.HasPrefix(p, "/message/") || strings.HasPrefix(p, "/sender/")
 }
 
 func (h *Handlers) uzAdminOK(r *http.Request) bool {
@@ -427,4 +433,69 @@ func (h *Handlers) uzClearAsyncQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"canceled": canceled})
+}
+
+func (h *Handlers) uzSenderAdvanced(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Messages []struct {
+			Number string `json:"number"`
+			Text   string `json:"text"`
+			Type   string `json:"type"`
+		} `json:"messages"`
+		DelayMin int `json:"delayMin"`
+		DelayMax int `json:"delayMax"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if len(body.Messages) == 0 {
+		writeErr(w, http.StatusBadRequest, "messages are required")
+		return
+	}
+	if body.DelayMin < 0 || body.DelayMax < body.DelayMin {
+		writeErr(w, http.StatusBadRequest, "delayMax must be greater than or equal to delayMin")
+		return
+	}
+	for _, message := range body.Messages {
+		if strings.TrimSpace(message.Number) == "" || strings.TrimSpace(message.Text) == "" || (message.Type != "" && message.Type != "text") {
+			writeErr(w, http.StatusBadRequest, "each message must contain number and text with type text")
+			return
+		}
+	}
+
+	folderID := uuid.NewString()
+	availableAt := time.Now()
+	for index, message := range body.Messages {
+		if index > 0 {
+			delay := body.DelayMin
+			if body.DelayMax > body.DelayMin {
+				delay += rand.IntN(body.DelayMax - body.DelayMin + 1)
+			}
+			availableAt = availableAt.Add(time.Duration(delay) * time.Second)
+		}
+		key := "broadcast:" + folderID + ":" + fmt.Sprint(index)
+		if _, _, err := h.mgr.EnqueueTextAtFrom(in.ID, message.Number, message.Text, key, "broadcast", availableAt); handleErr(w, err) {
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"folder_id": folderID, "count": len(body.Messages), "status": "queued"})
+}
+
+func (h *Handlers) uzSenderListFolders(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	folders, err := h.mgr.store.ListBroadcastFolders(in.ID)
+	if handleErr(w, err) {
+		return
+	}
+	for index := range folders {
+		folders[index].Owner = in.Owner
+	}
+	writeJSON(w, http.StatusOK, folders)
 }

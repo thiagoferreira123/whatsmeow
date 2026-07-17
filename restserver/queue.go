@@ -51,6 +51,24 @@ type queuedMediaPayload struct {
 	FileName string `json:"fileName,omitempty"`
 }
 
+type BroadcastFolder struct {
+	ID           string `json:"id"`
+	Info         string `json:"info"`
+	Status       string `json:"status"`
+	ScheduledFor int    `json:"scheduled_for"`
+	DelayMax     int    `json:"delayMax"`
+	DelayMin     int    `json:"delayMin"`
+	LogDelivered int    `json:"log_delivered"`
+	LogFailed    int    `json:"log_failed"`
+	LogPlayed    int    `json:"log_played"`
+	LogRead      int    `json:"log_read"`
+	LogSuccess   int    `json:"log_sucess"`
+	LogTotal     int    `json:"log_total"`
+	Owner        string `json:"owner"`
+	Created      string `json:"created"`
+	Updated      string `json:"updated"`
+}
+
 func scanQueueJob(s rowScanner) (QueueJob, error) {
 	var j QueueJob
 	err := s.Scan(&j.ID, &j.InstanceID, &j.IdempotencyKey, &j.Kind, &j.PayloadJSON,
@@ -248,6 +266,60 @@ func (s *Store) ListQueue(instanceID, status string, limit int) ([]QueueJob, err
 		out = append(out, job)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ListBroadcastFolders(instanceID string) ([]BroadcastFolder, error) {
+	rows, err := s.db.Query(`SELECT idempotency_key,status,created_at,updated_at
+		FROM outbound_queue WHERE instance_id=? AND idempotency_key LIKE 'broadcast:%'
+		ORDER BY created_at DESC`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	foldersByID := make(map[string]*BroadcastFolder)
+	order := make([]string, 0)
+	for rows.Next() {
+		var key, status, created, updated string
+		if err := rows.Scan(&key, &status, &created, &updated); err != nil {
+			return nil, err
+		}
+		parts := strings.Split(key, ":")
+		if len(parts) != 3 || parts[0] != "broadcast" || parts[1] == "" {
+			continue
+		}
+		folder := foldersByID[parts[1]]
+		if folder == nil {
+			folder = &BroadcastFolder{ID: parts[1], Status: "done", ScheduledFor: 1, Created: created, Updated: updated}
+			foldersByID[parts[1]] = folder
+			order = append(order, parts[1])
+		}
+		folder.LogTotal++
+		if created < folder.Created {
+			folder.Created = created
+		}
+		if updated > folder.Updated {
+			folder.Updated = updated
+		}
+		switch status {
+		case queueSent:
+			folder.LogSuccess++
+			folder.LogDelivered++
+		case queueFailed:
+			folder.LogFailed++
+		case queueQueued, queueWaitingConnection, queueProcessing:
+			folder.Status = "sending"
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	folders := make([]BroadcastFolder, 0, len(order))
+	for _, id := range order {
+		folders = append(folders, *foldersByID[id])
+	}
+	return folders, nil
 }
 
 func (m *Manager) EnqueueText(instanceID, number, text, key string) (QueueJob, bool, error) {

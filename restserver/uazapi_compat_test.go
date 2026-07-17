@@ -358,3 +358,71 @@ func TestUazapiCompatAsyncTextHonorsAvailableAt(t *testing.T) {
 		t.Fatalf("availableAt=%s, want %s", got, availableAt)
 	}
 }
+
+func TestUazapiCompatSenderAdvancedQueuesEntireCampaignAndListsHistory(t *testing.T) {
+	t.Setenv("ADMIN_API_KEY", "admin-secret")
+	cfg := loadConfig()
+	m := testUazapiCompatManager(t, cfg)
+	in, err := m.Create("nutricionist_46", "46", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewHandlers(m, cfg).Router()
+
+	body := `{
+		"messages":[
+			{"number":"5567999999901","text":"mensagem 1","type":"text"},
+			{"number":"5567999999902","text":"mensagem 2","type":"text"},
+			{"number":"5567999999903","text":"mensagem 3","type":"text"}
+		],
+		"delayMin":10,
+		"delayMax":10,
+		"scheduled_for":1,
+		"info":"campanha csv"
+	}`
+	advancedReq := httptest.NewRequest(http.MethodPost, "/sender/advanced", strings.NewReader(body))
+	advancedReq.Header.Set("Content-Type", "application/json")
+	advancedReq.Header.Set("token", in.Token)
+	advancedRec := httptest.NewRecorder()
+	router.ServeHTTP(advancedRec, advancedReq)
+	if advancedRec.Code != http.StatusOK {
+		t.Fatalf("POST /sender/advanced status=%d body=%s", advancedRec.Code, advancedRec.Body.String())
+	}
+	var advanced struct {
+		FolderID string `json:"folder_id"`
+		Count    int    `json:"count"`
+		Status   string `json:"status"`
+	}
+	if err := json.NewDecoder(advancedRec.Body).Decode(&advanced); err != nil {
+		t.Fatal(err)
+	}
+	if advanced.FolderID == "" || advanced.Count != 3 || advanced.Status != "queued" {
+		t.Fatalf("POST /sender/advanced response=%#v", advanced)
+	}
+	for index := range 3 {
+		key := fmt.Sprintf("broadcast:%s:%d", advanced.FolderID, index)
+		if _, err := m.store.GetQueueByKey(in.ID, key); err != nil {
+			t.Fatalf("campaign message %d was not queued: %v", index, err)
+		}
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/sender/listfolders", nil)
+	listReq.Header.Set("token", in.Token)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /sender/listfolders status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var folders []struct {
+		ID         string `json:"id"`
+		Status     string `json:"status"`
+		LogSuccess int    `json:"log_sucess"`
+		LogTotal   int    `json:"log_total"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&folders); err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].ID != advanced.FolderID || folders[0].Status != "sending" || folders[0].LogSuccess != 0 || folders[0].LogTotal != 3 {
+		t.Fatalf("GET /sender/listfolders response=%#v", folders)
+	}
+}
