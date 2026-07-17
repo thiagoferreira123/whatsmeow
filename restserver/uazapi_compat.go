@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"strings"
+	"time"
 )
 
 // uazapi wire-compat layer: lets the DietSystem backend treat this service as a
@@ -306,16 +307,28 @@ func (h *Handlers) uzSendText(w http.ResponseWriter, r *http.Request) {
 		Text           string `json:"text"`
 		Async          bool   `json:"async"`
 		IdempotencyKey string `json:"idempotencyKey"`
+		AvailableAt    string `json:"availableAt"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
 	if body.Async {
+		availableAt := time.Now()
+		if strings.TrimSpace(body.AvailableAt) != "" {
+			parsed, err := time.Parse(time.RFC3339, body.AvailableAt)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, "availableAt must be RFC3339")
+				return
+			}
+			if parsed.After(availableAt) {
+				availableAt = parsed
+			}
+		}
 		key := body.IdempotencyKey
 		if key == "" {
 			key = r.Header.Get("Idempotency-Key")
 		}
-		job, created, err := h.mgr.EnqueueTextFrom(in.ID, body.Number, body.Text, key, "uazapi_compat")
+		job, created, err := h.mgr.EnqueueTextAtFrom(in.ID, body.Number, body.Text, key, "uazapi_compat", availableAt)
 		if handleErr(w, err) {
 			return
 		}

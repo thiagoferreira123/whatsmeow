@@ -255,3 +255,52 @@ func TestUazapiCompatInitCreatesInstanceWithDietSystemWebhook(t *testing.T) {
 		t.Fatalf("excludeMessages=%v", got.ExcludeMessages)
 	}
 }
+
+func TestUazapiCompatAsyncTextHonorsAvailableAt(t *testing.T) {
+	t.Setenv("ADMIN_API_KEY", "admin-secret")
+	cfg := loadConfig()
+	m := testUazapiCompatManager(t, cfg)
+	router := NewHandlers(m, cfg).Router()
+
+	initReq := httptest.NewRequest(http.MethodPost, "/instance/init", strings.NewReader(`{"name":"nutricionist_46","adminField01":"46"}`))
+	initReq.Header.Set("Content-Type", "application/json")
+	initReq.Header.Set("admintoken", "admin-secret")
+	initRec := httptest.NewRecorder()
+	router.ServeHTTP(initRec, initReq)
+	if initRec.Code != http.StatusOK {
+		t.Fatalf("POST /instance/init status=%d body=%s", initRec.Code, initRec.Body.String())
+	}
+	var created struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(initRec.Body).Decode(&created); err != nil || created.Token == "" {
+		t.Fatalf("decode created instance: token=%q err=%v", created.Token, err)
+	}
+
+	availableAt := time.Now().UTC().Add(10 * time.Minute).Truncate(time.Second)
+	body := fmt.Sprintf(`{"number":"5567999999999","text":"mensagem agendada","async":true,"idempotencyKey":"campaign-1:0","availableAt":%q}`, availableAt.Format(time.RFC3339))
+	sendReq := httptest.NewRequest(http.MethodPost, "/send/text", strings.NewReader(body))
+	sendReq.Header.Set("Content-Type", "application/json")
+	sendReq.Header.Set("token", created.Token)
+	sendRec := httptest.NewRecorder()
+	router.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusAccepted {
+		t.Fatalf("POST /send/text status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	instances, err := m.store.List()
+	if err != nil || len(instances) != 1 {
+		t.Fatalf("list instances: count=%d err=%v", len(instances), err)
+	}
+	job, err := m.store.GetQueueByKey(instances[0].ID, "campaign-1:0")
+	if err != nil {
+		t.Fatalf("get queued message: %v", err)
+	}
+	got, err := time.Parse(time.RFC3339Nano, job.AvailableAt)
+	if err != nil {
+		t.Fatalf("parse availableAt %q: %v", job.AvailableAt, err)
+	}
+	if !got.Equal(availableAt) {
+		t.Fatalf("availableAt=%s, want %s", got, availableAt)
+	}
+}

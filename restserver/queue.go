@@ -62,6 +62,10 @@ func scanQueueJob(s rowScanner) (QueueJob, error) {
 const queueCols = `id,instance_id,idempotency_key,kind,payload_json,status,attempts,max_attempts,available_at,created_at,updated_at,message_id,last_error`
 
 func (s *Store) Enqueue(instanceID, key, kind string, payload any, maxAttempts int) (QueueJob, bool, error) {
+	return s.EnqueueAt(instanceID, key, kind, payload, maxAttempts, time.Now())
+}
+
+func (s *Store) EnqueueAt(instanceID, key, kind string, payload any, maxAttempts int, availableAt time.Time) (QueueJob, bool, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return QueueJob{}, false, err
@@ -75,9 +79,13 @@ func (s *Store) Enqueue(instanceID, key, kind string, payload any, maxAttempts i
 		key = id
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if availableAt.IsZero() {
+		availableAt = time.Now()
+	}
+	availableAtText := availableAt.UTC().Format(time.RFC3339Nano)
 	res, err := s.db.Exec(`INSERT OR IGNORE INTO outbound_queue
 		(id,instance_id,idempotency_key,kind,payload_json,status,attempts,max_attempts,available_at,created_at,updated_at)
-		VALUES (?,?,?,?,?,'queued',0,?,?,?,?)`, id, instanceID, key, kind, string(data), maxAttempts, now, now, now)
+		VALUES (?,?,?,?,?,'queued',0,?,?,?,?)`, id, instanceID, key, kind, string(data), maxAttempts, availableAtText, now, now)
 	if err != nil {
 		return QueueJob{}, false, err
 	}
@@ -247,13 +255,17 @@ func (m *Manager) EnqueueText(instanceID, number, text, key string) (QueueJob, b
 }
 
 func (m *Manager) EnqueueTextFrom(instanceID, number, text, key, source string) (QueueJob, bool, error) {
+	return m.EnqueueTextAtFrom(instanceID, number, text, key, source, time.Now())
+}
+
+func (m *Manager) EnqueueTextAtFrom(instanceID, number, text, key, source string, availableAt time.Time) (QueueJob, bool, error) {
 	if m.get(instanceID) == nil {
 		return QueueJob{}, false, errNotFound
 	}
 	if strings.TrimSpace(number) == "" || strings.TrimSpace(text) == "" {
 		return QueueJob{}, false, &apiError{Status: 400, Msg: "number and text are required"}
 	}
-	job, created, err := m.store.Enqueue(instanceID, key, "text", queuedTextPayload{Number: number, Text: text}, m.cfg.QueueMaxAttempts)
+	job, created, err := m.store.EnqueueAt(instanceID, key, "text", queuedTextPayload{Number: number, Text: text}, m.cfg.QueueMaxAttempts, availableAt)
 	if created {
 		m.stats.queueEnqueued.Add(1)
 		m.auditInstance(instanceID, logCategoryQueue, "message_enqueued", "info", InstanceLog{
