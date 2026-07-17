@@ -256,6 +256,60 @@ func TestUazapiCompatInitCreatesInstanceWithDietSystemWebhook(t *testing.T) {
 	}
 }
 
+func TestUazapiCompatStatusAndListKeepCurrentQRCode(t *testing.T) {
+	t.Setenv("ADMIN_API_KEY", "admin-secret")
+	cfg := loadConfig()
+	m := testUazapiCompatManager(t, cfg)
+	in, err := m.Create("nutricionist_46", "46", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt := m.get(in.ID)
+	rt.mu.Lock()
+	rt.qrCode = "current-pairing-code"
+	rt.qrExpiresAt = time.Now().Add(time.Minute)
+	rt.mu.Unlock()
+
+	router := NewHandlers(m, cfg).Router()
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/instance/status", nil)
+	statusReq.Header.Set("token", in.Token)
+	statusRec := httptest.NewRecorder()
+	router.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("GET /instance/status status=%d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusBody struct {
+		Instance struct {
+			QRCode string `json:"qrcode"`
+		} `json:"instance"`
+	}
+	if err := json.NewDecoder(statusRec.Body).Decode(&statusBody); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(statusBody.Instance.QRCode, "data:image/png;base64,") {
+		t.Fatalf("GET /instance/status qrcode=%q, want current QR data URI", statusBody.Instance.QRCode)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/instance/all", nil)
+	listReq.Header.Set("admintoken", "admin-secret")
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /instance/all status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listBody []struct {
+		QRCode string `json:"qrcode"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&listBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(listBody) != 1 || !strings.HasPrefix(listBody[0].QRCode, "data:image/png;base64,") {
+		t.Fatalf("GET /instance/all response=%#v, want current QR data URI", listBody)
+	}
+}
+
 func TestUazapiCompatAsyncTextHonorsAvailableAt(t *testing.T) {
 	t.Setenv("ADMIN_API_KEY", "admin-secret")
 	cfg := loadConfig()

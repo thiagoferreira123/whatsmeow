@@ -370,6 +370,7 @@ func (m *Manager) StatusDetail(id string) (map[string]any, error) {
 	rt.mu.RLock()
 	cli := rt.client
 	paused, conflicted, resetting := rt.paused, rt.conflicted, rt.resetting
+	currentQR := rt.qrCode
 	rt.mu.RUnlock()
 	loggedIn := cli != nil && cli.IsLoggedIn()
 	owner := in.Owner
@@ -390,6 +391,11 @@ func (m *Manager) StatusDetail(id string) (map[string]any, error) {
 		"hibernated":          paused,
 		"conflicted":          conflicted,
 		"resetting":           resetting,
+	}
+	if currentQR != "" {
+		if png, err := qrcode.Encode(currentQR, qrcode.Medium, 256); err == nil {
+			result["qrcode"] = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+		}
 	}
 	if queue, err := m.store.QueueSummary(id); err == nil {
 		result["queue"] = queue

@@ -120,7 +120,7 @@ func (h *Handlers) uzInstanceObj(in Instance) map[string]any {
 		"paircode":       "",
 		"lastDisconnect": in.LastDisconnectReason,
 	}
-	for _, key := range []string{"connected", "loggedIn", "hibernated", "conflicted", "resetting", "lastResetAt", "sendingBlockedUntil", "queue"} {
+	for _, key := range []string{"connected", "loggedIn", "hibernated", "conflicted", "resetting", "lastResetAt", "sendingBlockedUntil", "queue", "qrcode"} {
 		if detail != nil {
 			if value, ok := detail[key]; ok {
 				obj[key] = value
