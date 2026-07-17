@@ -86,6 +86,9 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("POST /instances/{id}/reset", h.resetRuntime)
 	mux.HandleFunc("GET /instances/{id}/queue", h.getQueue)
 	mux.HandleFunc("DELETE /instances/{id}/queue", h.clearQueue)
+	mux.HandleFunc("POST /instances/{id}/broadcasts", h.createBroadcast)
+	mux.HandleFunc("GET /instances/{id}/broadcasts", h.listBroadcasts)
+	mux.HandleFunc("POST /instances/{id}/broadcasts/{folderId}/control", h.controlBroadcast)
 	mux.HandleFunc("GET /instances/{id}/logs", h.getInstanceLogs)
 
 	// uazapi wire-compat layer (header auth admintoken/token; see uazapi_compat.go).

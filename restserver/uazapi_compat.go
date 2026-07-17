@@ -441,6 +441,18 @@ func (h *Handlers) uzSenderAdvanced(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.createBroadcastForInstance(w, r, in)
+}
+
+func (h *Handlers) createBroadcast(w http.ResponseWriter, r *http.Request) {
+	in, err := h.mgr.Get(r.PathValue("id"))
+	if handleErr(w, err) {
+		return
+	}
+	h.createBroadcastForInstance(w, r, in)
+}
+
+func (h *Handlers) createBroadcastForInstance(w http.ResponseWriter, r *http.Request, in Instance) {
 	var body struct {
 		Messages []struct {
 			Number string `json:"number"`
@@ -501,6 +513,18 @@ func (h *Handlers) uzSenderListFolders(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.listBroadcastsForInstance(w, in)
+}
+
+func (h *Handlers) listBroadcasts(w http.ResponseWriter, r *http.Request) {
+	in, err := h.mgr.Get(r.PathValue("id"))
+	if handleErr(w, err) {
+		return
+	}
+	h.listBroadcastsForInstance(w, in)
+}
+
+func (h *Handlers) listBroadcastsForInstance(w http.ResponseWriter, in Instance) {
 	folders, err := h.mgr.store.ListBroadcastFolders(in.ID)
 	if handleErr(w, err) {
 		return
@@ -523,7 +547,25 @@ func (h *Handlers) uzSenderEdit(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if !validBroadcastFolderID(body.FolderID) {
+	h.controlBroadcastForInstance(w, in, body.FolderID, body.Action)
+}
+
+func (h *Handlers) controlBroadcast(w http.ResponseWriter, r *http.Request) {
+	in, err := h.mgr.Get(r.PathValue("id"))
+	if handleErr(w, err) {
+		return
+	}
+	var body struct {
+		Action string `json:"action"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	h.controlBroadcastForInstance(w, in, r.PathValue("folderId"), body.Action)
+}
+
+func (h *Handlers) controlBroadcastForInstance(w http.ResponseWriter, in Instance, folderID, action string) {
+	if !validBroadcastFolderID(folderID) {
 		writeErr(w, http.StatusBadRequest, "invalid folder_id")
 		return
 	}
@@ -531,13 +573,13 @@ func (h *Handlers) uzSenderEdit(w http.ResponseWriter, r *http.Request) {
 		affected int64
 		err      error
 	)
-	switch body.Action {
+	switch action {
 	case "stop":
-		affected, err = h.mgr.store.PauseBroadcastFolder(in.ID, body.FolderID)
+		affected, err = h.mgr.store.PauseBroadcastFolder(in.ID, folderID)
 	case "continue":
-		affected, err = h.mgr.store.ResumeBroadcastFolder(in.ID, body.FolderID)
+		affected, err = h.mgr.store.ResumeBroadcastFolder(in.ID, folderID)
 	case "delete":
-		affected, err = h.mgr.store.DeleteBroadcastFolder(in.ID, body.FolderID)
+		affected, err = h.mgr.store.DeleteBroadcastFolder(in.ID, folderID)
 	default:
 		writeErr(w, http.StatusBadRequest, "action must be stop, continue or delete")
 		return
