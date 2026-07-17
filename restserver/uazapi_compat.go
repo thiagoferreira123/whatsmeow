@@ -466,6 +466,16 @@ func (h *Handlers) uzSenderAdvanced(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	activeRecipients, err := h.mgr.store.ActiveBroadcastRecipients(in.ID)
+	if handleErr(w, err) {
+		return
+	}
+	for _, message := range body.Messages {
+		if _, exists := activeRecipients[permissionKey(message.Number)]; exists {
+			writeErr(w, http.StatusConflict, "recipient already belongs to an active broadcast campaign")
+			return
+		}
+	}
 
 	folderID := uuid.NewString()
 	availableAt := time.Now()

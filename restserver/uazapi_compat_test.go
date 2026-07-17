@@ -399,10 +399,26 @@ func TestUazapiCompatSenderAdvancedQueuesEntireCampaignAndListsHistory(t *testin
 	if advanced.FolderID == "" || advanced.Count != 3 || advanced.Status != "queued" {
 		t.Fatalf("POST /sender/advanced response=%#v", advanced)
 	}
+	queuedJobs := make([]QueueJob, 0, 3)
 	for index := range 3 {
 		key := fmt.Sprintf("broadcast:%s:%d", advanced.FolderID, index)
-		if _, err := m.store.GetQueueByKey(in.ID, key); err != nil {
+		job, err := m.store.GetQueueByKey(in.ID, key)
+		if err != nil {
 			t.Fatalf("campaign message %d was not queued: %v", index, err)
+		}
+		queuedJobs = append(queuedJobs, job)
+	}
+	for index := 1; index < len(queuedJobs); index++ {
+		previous, err := time.Parse(time.RFC3339Nano, queuedJobs[index-1].AvailableAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := time.Parse(time.RFC3339Nano, queuedJobs[index].AvailableAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gap := current.Sub(previous); gap != 10*time.Second {
+			t.Fatalf("campaign delay[%d]=%s, want 10s", index, gap)
 		}
 	}
 
@@ -424,5 +440,53 @@ func TestUazapiCompatSenderAdvancedQueuesEntireCampaignAndListsHistory(t *testin
 	}
 	if len(folders) != 1 || folders[0].ID != advanced.FolderID || folders[0].Status != "sending" || folders[0].LogSuccess != 0 || folders[0].LogTotal != 3 {
 		t.Fatalf("GET /sender/listfolders response=%#v", folders)
+	}
+
+	duplicateReq := httptest.NewRequest(http.MethodPost, "/sender/advanced", strings.NewReader(body))
+	duplicateReq.Header.Set("Content-Type", "application/json")
+	duplicateReq.Header.Set("token", in.Token)
+	duplicateRec := httptest.NewRecorder()
+	router.ServeHTTP(duplicateRec, duplicateReq)
+	if duplicateRec.Code != http.StatusConflict {
+		t.Fatalf("duplicate POST /sender/advanced status=%d body=%s, want 409", duplicateRec.Code, duplicateRec.Body.String())
+	}
+	foldersAfterDuplicate, err := m.store.ListBroadcastFolders(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(foldersAfterDuplicate) != 1 || foldersAfterDuplicate[0].LogTotal != 3 {
+		t.Fatalf("duplicate campaign changed queue: %#v", foldersAfterDuplicate)
+	}
+}
+
+func TestUazapiCompatListFoldersIncludesExistingRunningCampaign(t *testing.T) {
+	t.Setenv("ADMIN_API_KEY", "admin-secret")
+	cfg := loadConfig()
+	m := testUazapiCompatManager(t, cfg)
+	in, err := m.Create("nutricionist_46", "46", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	availableAt := time.Now().Add(time.Minute)
+	for index := range 2 {
+		key := fmt.Sprintf("broadcast:existing-campaign:%d", index)
+		if _, _, err := m.EnqueueTextAtFrom(in.ID, fmt.Sprintf("556799999990%d", index), "mensagem", key, "uazapi_compat", availableAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sender/listfolders", nil)
+	req.Header.Set("token", in.Token)
+	rec := httptest.NewRecorder()
+	NewHandlers(m, cfg).Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /sender/listfolders status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var folders []BroadcastFolder
+	if err := json.NewDecoder(rec.Body).Decode(&folders); err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].ID != "existing-campaign" || folders[0].Status != "sending" || folders[0].LogTotal != 2 {
+		t.Fatalf("existing campaign history=%#v", folders)
 	}
 }

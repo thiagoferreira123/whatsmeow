@@ -322,6 +322,59 @@ func (s *Store) ListBroadcastFolders(instanceID string) ([]BroadcastFolder, erro
 	return folders, nil
 }
 
+func (s *Store) ActiveBroadcastRecipients(instanceID string) (map[string]struct{}, error) {
+	rows, err := s.db.Query(`SELECT idempotency_key,payload_json,status
+		FROM outbound_queue WHERE instance_id=? AND idempotency_key LIKE 'broadcast:%'`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type campaignState struct {
+		active     bool
+		recipients []string
+	}
+	campaigns := make(map[string]*campaignState)
+	for rows.Next() {
+		var key, payloadJSON, status string
+		if err := rows.Scan(&key, &payloadJSON, &status); err != nil {
+			return nil, err
+		}
+		parts := strings.Split(key, ":")
+		if len(parts) != 3 || parts[0] != "broadcast" || parts[1] == "" {
+			continue
+		}
+		state := campaigns[parts[1]]
+		if state == nil {
+			state = &campaignState{}
+			campaigns[parts[1]] = state
+		}
+		if status == queueQueued || status == queueWaitingConnection || status == queueProcessing {
+			state.active = true
+		}
+		var payload queuedTextPayload
+		if json.Unmarshal([]byte(payloadJSON), &payload) == nil {
+			if recipient := permissionKey(payload.Number); recipient != "" {
+				state.recipients = append(state.recipients, recipient)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	recipients := make(map[string]struct{})
+	for _, state := range campaigns {
+		if !state.active {
+			continue
+		}
+		for _, recipient := range state.recipients {
+			recipients[recipient] = struct{}{}
+		}
+	}
+	return recipients, nil
+}
+
 func (m *Manager) EnqueueText(instanceID, number, text, key string) (QueueJob, bool, error) {
 	return m.EnqueueTextFrom(instanceID, number, text, key, "api")
 }
