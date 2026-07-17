@@ -50,6 +50,37 @@ func TestRuntimeLeaseAllowsOnlyOneOwnerAndHandsOff(t *testing.T) {
 	}
 }
 
+func TestRuntimeLeaseIgnoresTakeoverFromOlderLegacyContainer(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:runtime-lease-legacy?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	active, err := newRuntimeLease(db, "200:new-container:1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := newRuntimeLease(db, "old-container:1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	acquired, err := active.TryAcquire(ctx)
+	if err != nil || !acquired {
+		t.Fatalf("active acquire = %v, %v; want true, nil", acquired, err)
+	}
+	acquired, err = legacy.TryAcquire(ctx)
+	if err != nil || acquired {
+		t.Fatalf("legacy acquire = %v, %v; want false, nil", acquired, err)
+	}
+	renewed, err := active.Renew(ctx)
+	if err != nil || !renewed {
+		t.Fatalf("renew after legacy takeover = %v, %v; want true, nil", renewed, err)
+	}
+}
+
 func TestStandbyRuntimeIsLiveButNotReadyAndRejectsTraffic(t *testing.T) {
 	mgr, _ := testPolicyManager(t, Config{})
 	mgr.SetRuntimeActive(false)

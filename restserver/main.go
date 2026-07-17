@@ -53,7 +53,7 @@ func main() {
 	mgr := NewManager(container, store, cfg, waClientLog)
 	mgr.SetRuntimeActive(false)
 	hostname, _ := os.Hostname()
-	ownerID := hostname + ":" + strconv.Itoa(os.Getpid())
+	ownerID := strconv.FormatInt(time.Now().UnixNano(), 10) + ":" + hostname + ":" + strconv.Itoa(os.Getpid())
 	leaseTTL := time.Duration(cfg.RuntimeLeaseTTLSeconds) * time.Second
 	leaseRetry := time.Duration(cfg.RuntimeLeaseRetrySeconds) * time.Second
 	lease, err := newRuntimeLease(db, ownerID, leaseTTL)

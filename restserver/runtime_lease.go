@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -66,15 +68,49 @@ func (l *runtimeLease) TryAcquire(ctx context.Context) (bool, error) {
 }
 
 func (l *runtimeLease) Renew(ctx context.Context) (bool, error) {
+	var takeoverOwner string
+	err := l.db.QueryRowContext(ctx,
+		`SELECT takeover_owner FROM runtime_leases WHERE name=? AND owner_id=?`,
+		runtimeLeaseName, l.ownerID,
+	).Scan(&takeoverOwner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if takeoverOwner != "" && shouldYieldRuntimeLease(l.ownerID, takeoverOwner) {
+		return false, nil
+	}
+
 	result, err := l.db.ExecContext(ctx,
-		`UPDATE runtime_leases SET expires_at=? WHERE name=? AND owner_id=? AND takeover_owner=''`,
-		time.Now().Add(l.ttl).UnixMilli(), runtimeLeaseName, l.ownerID,
+		`UPDATE runtime_leases SET expires_at=?, takeover_owner=''
+		 WHERE name=? AND owner_id=? AND takeover_owner=?`,
+		time.Now().Add(l.ttl).UnixMilli(), runtimeLeaseName, l.ownerID, takeoverOwner,
 	)
 	if err != nil {
 		return false, err
 	}
 	affected, err := result.RowsAffected()
 	return affected == 1, err
+}
+
+func shouldYieldRuntimeLease(ownerID, takeoverOwner string) bool {
+	ownerGeneration, ownerVersioned := runtimeLeaseGeneration(ownerID)
+	takeoverGeneration, takeoverVersioned := runtimeLeaseGeneration(takeoverOwner)
+	if ownerVersioned {
+		return takeoverVersioned && takeoverGeneration > ownerGeneration
+	}
+	return true
+}
+
+func runtimeLeaseGeneration(ownerID string) (int64, bool) {
+	prefix, _, found := strings.Cut(ownerID, ":")
+	if !found {
+		return 0, false
+	}
+	generation, err := strconv.ParseInt(prefix, 10, 64)
+	return generation, err == nil && generation > 0
 }
 
 func (l *runtimeLease) Release(ctx context.Context) error {
