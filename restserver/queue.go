@@ -17,6 +17,7 @@ const (
 	queueQueued            = "queued"
 	queueWaitingConnection = "waiting_connection"
 	queueProcessing        = "processing"
+	queuePaused            = "paused"
 	queueSent              = "sent"
 	queueFailed            = "failed"
 	queueCanceled          = "canceled"
@@ -307,8 +308,12 @@ func (s *Store) ListBroadcastFolders(instanceID string) ([]BroadcastFolder, erro
 			folder.LogDelivered++
 		case queueFailed:
 			folder.LogFailed++
+		case queuePaused:
+			folder.Status = "paused"
 		case queueQueued, queueWaitingConnection, queueProcessing:
-			folder.Status = "sending"
+			if folder.Status != "paused" {
+				folder.Status = "sending"
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -349,7 +354,7 @@ func (s *Store) ActiveBroadcastRecipients(instanceID string) (map[string]struct{
 			state = &campaignState{}
 			campaigns[parts[1]] = state
 		}
-		if status == queueQueued || status == queueWaitingConnection || status == queueProcessing {
+		if status == queueQueued || status == queueWaitingConnection || status == queueProcessing || status == queuePaused {
 			state.active = true
 		}
 		var payload queuedTextPayload
@@ -373,6 +378,77 @@ func (s *Store) ActiveBroadcastRecipients(instanceID string) (map[string]struct{
 		}
 	}
 	return recipients, nil
+}
+
+func (s *Store) PauseBroadcastFolder(instanceID, folderID string) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.Exec(`UPDATE outbound_queue SET status='paused',updated_at=?
+		WHERE instance_id=? AND idempotency_key LIKE ? AND status IN ('queued','waiting_connection')`,
+		now, instanceID, "broadcast:"+folderID+":%")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *Store) ResumeBroadcastFolder(instanceID, folderID string) (int64, error) {
+	rows, err := s.db.Query(`SELECT id,available_at FROM outbound_queue
+		WHERE instance_id=? AND idempotency_key LIKE ? AND status='paused'
+		ORDER BY available_at,created_at`, instanceID, "broadcast:"+folderID+":%")
+	if err != nil {
+		return 0, err
+	}
+	type pausedJob struct{ id, availableAt string }
+	paused := make([]pausedJob, 0)
+	for rows.Next() {
+		var job pausedJob
+		if err := rows.Scan(&job.id, &job.availableAt); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		paused = append(paused, job)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if len(paused) == 0 {
+		return 0, nil
+	}
+	firstAvailable, err := time.Parse(time.RFC3339Nano, paused[0].availableAt)
+	if err != nil {
+		return 0, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	for _, job := range paused {
+		original, err := time.Parse(time.RFC3339Nano, job.availableAt)
+		if err != nil {
+			return 0, err
+		}
+		availableAt := now.Add(original.Sub(firstAvailable)).Format(time.RFC3339Nano)
+		if _, err := tx.Exec(`UPDATE outbound_queue SET status='queued',available_at=?,updated_at=? WHERE id=? AND status='paused'`,
+			availableAt, now.Format(time.RFC3339Nano), job.id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(paused)), nil
+}
+
+func (s *Store) DeleteBroadcastFolder(instanceID, folderID string) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM outbound_queue WHERE instance_id=? AND idempotency_key LIKE ?`,
+		instanceID, "broadcast:"+folderID+":%")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (m *Manager) EnqueueText(instanceID, number, text, key string) (QueueJob, bool, error) {

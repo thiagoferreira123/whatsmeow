@@ -457,6 +457,46 @@ func TestUazapiCompatSenderAdvancedQueuesEntireCampaignAndListsHistory(t *testin
 	if len(foldersAfterDuplicate) != 1 || foldersAfterDuplicate[0].LogTotal != 3 {
 		t.Fatalf("duplicate campaign changed queue: %#v", foldersAfterDuplicate)
 	}
+
+	editCampaign := func(action string) {
+		t.Helper()
+		editBody := fmt.Sprintf(`{"folder_id":%q,"action":%q}`, advanced.FolderID, action)
+		req := httptest.NewRequest(http.MethodPost, "/sender/edit", strings.NewReader(editBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("token", in.Token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST /sender/edit action=%s status=%d body=%s", action, rec.Code, rec.Body.String())
+		}
+	}
+
+	editCampaign("stop")
+	pausedFolders, err := m.store.ListBroadcastFolders(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pausedFolders) != 1 || pausedFolders[0].Status != "paused" {
+		t.Fatalf("paused campaign history=%#v", pausedFolders)
+	}
+
+	editCampaign("continue")
+	resumedFolders, err := m.store.ListBroadcastFolders(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resumedFolders) != 1 || resumedFolders[0].Status != "sending" {
+		t.Fatalf("resumed campaign history=%#v", resumedFolders)
+	}
+
+	editCampaign("delete")
+	deletedFolders, err := m.store.ListBroadcastFolders(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deletedFolders) != 0 {
+		t.Fatalf("deleted campaign remains in history=%#v", deletedFolders)
+	}
 }
 
 func TestUazapiCompatListFoldersIncludesExistingRunningCampaign(t *testing.T) {

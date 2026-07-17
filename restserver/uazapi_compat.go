@@ -68,6 +68,7 @@ func (h *Handlers) registerUazapiCompat(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /message/async", h.uzClearAsyncQueue)
 	mux.HandleFunc("POST /sender/advanced", h.uzSenderAdvanced)
 	mux.HandleFunc("GET /sender/listfolders", h.uzSenderListFolders)
+	mux.HandleFunc("POST /sender/edit", h.uzSenderEdit)
 }
 
 // isUazapiCompatPath: these endpoints do their own admintoken/token auth, so they
@@ -508,4 +509,53 @@ func (h *Handlers) uzSenderListFolders(w http.ResponseWriter, r *http.Request) {
 		folders[index].Owner = in.Owner
 	}
 	writeJSON(w, http.StatusOK, folders)
+}
+
+func (h *Handlers) uzSenderEdit(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.uzByToken(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		FolderID string `json:"folder_id"`
+		Action   string `json:"action"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if !validBroadcastFolderID(body.FolderID) {
+		writeErr(w, http.StatusBadRequest, "invalid folder_id")
+		return
+	}
+	var (
+		affected int64
+		err      error
+	)
+	switch body.Action {
+	case "stop":
+		affected, err = h.mgr.store.PauseBroadcastFolder(in.ID, body.FolderID)
+	case "continue":
+		affected, err = h.mgr.store.ResumeBroadcastFolder(in.ID, body.FolderID)
+	case "delete":
+		affected, err = h.mgr.store.DeleteBroadcastFolder(in.ID, body.FolderID)
+	default:
+		writeErr(w, http.StatusBadRequest, "action must be stop, continue or delete")
+		return
+	}
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "affected": affected})
+}
+
+func validBroadcastFolderID(folderID string) bool {
+	if folderID == "" {
+		return false
+	}
+	for _, char := range folderID {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' {
+			return false
+		}
+	}
+	return true
 }
