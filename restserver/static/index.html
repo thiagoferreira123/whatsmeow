@@ -52,6 +52,8 @@
   .dialog label{display:block;text-align:left;margin-bottom:6px;color:var(--muted);font-size:12px;font-weight:650}
   .dialog input{width:100%;padding:11px 12px;color:var(--text);background:#1d2a32;border:1px solid var(--line);border-radius:8px;outline:none}
   .dialog input:focus{border-color:var(--green)}
+  .field-note{margin:7px 0 0;text-align:left;color:var(--muted);font-size:11.5px;line-height:1.5}
+  .field-note code{padding:1px 5px;border-radius:4px;background:#1d2a32;color:var(--text);font:11px ui-monospace,SFMono-Regular,Consolas,monospace}
   .dialog .row{display:flex;gap:10px;margin-top:18px}
   .dialog .row button{flex:1;padding:11px}
   .btn-primary{background:var(--green);color:#062b16}
@@ -188,6 +190,11 @@
     <p>Dê um nome para reconhecer este número depois.</p>
     <label for="instanceName">Nome da instância</label>
     <input id="instanceName" type="text" placeholder="Ex.: Boas-vindas, Comercial…" autocomplete="off" />
+    <label for="instanceAdminField" style="margin-top:14px">Identificador para automações (opcional)</label>
+    <input id="instanceAdminField" type="text" placeholder="Ex.: welcome_bot, 46" autocomplete="off" />
+    <p class="field-note">É por este campo que o DietSystem encontra a instância
+      (o nome é só para você). Use o <code>professional_id</code> para o número de
+      um profissional, ou um apelido fixo para um robô — ex.: <code>welcome_bot</code>.</p>
     <div class="dialog-error" id="createError"></div>
     <div class="row">
       <button type="button" class="btn-ghost" id="createCancel">Cancelar</button>
@@ -317,7 +324,7 @@ function renderInstances(){
     }
     $('#rows').innerHTML = instances.map(instance => `
       <tr data-instance="${escapeHTML(instance.id)}">
-        <td><div class="instance-name">${escapeHTML(instance.name)}</div><div class="instance-id">${escapeHTML(instance.id)}</div></td>
+        <td><div class="instance-name">${escapeHTML(instance.name)}</div><div class="instance-id">${instance.adminField01 ? escapeHTML(instance.adminField01) : escapeHTML(instance.id)}</div></td>
         <td><span class="badge ${escapeHTML(instance.status || 'disconnected')}">${statusLabel(instance.status)}</span></td>
         <td>${profileHTML(instance)}</td>
         <td class="date">${formatDate(instance.createdAt)}</td>
@@ -431,6 +438,7 @@ let qrTimer = null;
 function openCreate(){
   $('#createError').textContent = '';
   $('#instanceName').value = '';
+  $('#instanceAdminField').value = '';
   $('#createOverlay').classList.remove('hidden');
   $('#instanceName').focus();
 }
@@ -442,6 +450,7 @@ function closeCreate(){
 async function submitCreate(event){
   event.preventDefault();
   const name = $('#instanceName').value.trim();
+  const adminField01 = $('#instanceAdminField').value.trim();
   $('#createError').textContent = '';
   if(!name){ $('#createError').textContent = 'Dê um nome para a instância.'; return; }
   const button = $('#createSubmit');
@@ -451,7 +460,7 @@ async function submitCreate(event){
     const instance = await request('/instances', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name})
+      body: JSON.stringify(adminField01 ? {name, adminField01} : {name})
     });
     closeCreate();
     await loadInstances();
