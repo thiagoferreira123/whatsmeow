@@ -40,8 +40,30 @@
   .panel-title{display:flex;align-items:center;gap:8px;padding:18px 20px;border-bottom:1px solid var(--line)}
   .panel-title h2{margin:0;font-size:14px;font-weight:650}
   .panel-title span{margin-left:8px;color:var(--muted);font-size:12px}
-  .search{width:min(280px,42vw);margin-left:auto;padding:9px 12px;color:var(--text);background:#1d2a32;border:1px solid var(--line);border-radius:8px;outline:none}
+  .search{width:min(240px,38vw);margin-left:auto;padding:9px 12px;color:var(--text);background:#1d2a32;border:1px solid var(--line);border-radius:8px;outline:none}
   .search:focus{border-color:var(--green)}
+  .new-instance{margin-left:10px;background:var(--green);color:#062b16}
+  .new-instance:hover{filter:brightness(1.05)}
+  .connect{background:var(--green-soft);border:1px solid rgba(37,211,102,.4);color:var(--green);margin-right:8px}
+  .connect:hover{background:rgba(37,211,102,.2)}
+  .dialog{width:min(400px,100%);padding:26px;background:var(--panel);border:1px solid var(--line);border-radius:16px;text-align:center}
+  .dialog h2{margin:0 0 6px;font-size:18px}
+  .dialog p{margin:0 0 18px;color:var(--muted);font-size:13px}
+  .dialog label{display:block;text-align:left;margin-bottom:6px;color:var(--muted);font-size:12px;font-weight:650}
+  .dialog input{width:100%;padding:11px 12px;color:var(--text);background:#1d2a32;border:1px solid var(--line);border-radius:8px;outline:none}
+  .dialog input:focus{border-color:var(--green)}
+  .dialog .row{display:flex;gap:10px;margin-top:18px}
+  .dialog .row button{flex:1;padding:11px}
+  .btn-primary{background:var(--green);color:#062b16}
+  .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .btn-ghost:hover{color:var(--text);border-color:#42535e}
+  .qr-box{display:grid;place-items:center;min-height:270px;margin:6px 0 4px}
+  .qr-box img{width:256px;height:256px;border-radius:12px;background:#fff;padding:10px}
+  .qr-status{margin-top:12px;color:var(--muted);font-size:13px;min-height:18px}
+  .qr-status.connected{color:var(--green);font-weight:650}
+  .spinner{width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .dialog-error{min-height:18px;margin-top:10px;color:var(--red);font-size:12px}
   table{width:100%;border-collapse:collapse}
   th{padding:11px 16px;text-align:left;color:var(--muted);font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.55px}
   td{padding:15px 16px;border-top:1px solid var(--line);font-size:14px;vertical-align:middle}
@@ -123,6 +145,7 @@
       <h2>Instâncias criadas</h2>
       <span id="total"></span>
       <input class="search" id="search" type="search" placeholder="Buscar pelo nome…" autocomplete="off" />
+      <button class="new-instance" id="newInstance">+ Nova instância</button>
     </div>
     <table>
       <thead>
@@ -156,6 +179,33 @@
     </div>
     <div class="log-list" id="logList"><div class="empty">Carregando…</div></div>
   </aside>
+</div>
+
+<div class="overlay hidden" id="createOverlay">
+  <form class="dialog" id="createForm">
+    <div class="logo">W</div>
+    <h2>Nova instância</h2>
+    <p>Dê um nome para reconhecer este número depois.</p>
+    <label for="instanceName">Nome da instância</label>
+    <input id="instanceName" type="text" placeholder="Ex.: Boas-vindas, Comercial…" autocomplete="off" />
+    <div class="dialog-error" id="createError"></div>
+    <div class="row">
+      <button type="button" class="btn-ghost" id="createCancel">Cancelar</button>
+      <button type="submit" class="btn-primary" id="createSubmit">Criar e conectar</button>
+    </div>
+  </form>
+</div>
+
+<div class="overlay hidden" id="qrOverlay">
+  <div class="dialog">
+    <h2 id="qrTitle">Conectar WhatsApp</h2>
+    <p>Abra o WhatsApp no celular → Aparelhos conectados → Conectar um aparelho, e aponte para o código.</p>
+    <div class="qr-box" id="qrBox"><div class="spinner"></div></div>
+    <div class="qr-status" id="qrStatus">Gerando o código…</div>
+    <div class="row">
+      <button type="button" class="btn-ghost" id="qrClose">Fechar</button>
+    </div>
+  </div>
 </div>
 
 <div class="overlay" id="loginOverlay">
@@ -271,7 +321,7 @@ function renderInstances(){
         <td><span class="badge ${escapeHTML(instance.status || 'disconnected')}">${statusLabel(instance.status)}</span></td>
         <td>${profileHTML(instance)}</td>
         <td class="date">${formatDate(instance.createdAt)}</td>
-        <td class="actions"><button class="remove" data-remove="${escapeHTML(instance.id)}" data-name="${escapeHTML(instance.name)}">Remover</button></td>
+        <td class="actions">${instance.status === 'connected' ? '' : `<button class="connect" data-connect="${escapeHTML(instance.id)}" data-name="${escapeHTML(instance.name)}">Conectar</button>`}<button class="remove" data-remove="${escapeHTML(instance.id)}" data-name="${escapeHTML(instance.name)}">Remover</button></td>
       </tr>`).join('');
 }
 
@@ -349,6 +399,12 @@ $('#logFilters').addEventListener('click', event=>{
 });
 
 $('#rows').addEventListener('click', async event => {
+  const connectButton = event.target.closest('[data-connect]');
+  if(connectButton){
+    const instance = instancesCache.find(item => item.id === connectButton.dataset.connect);
+    if(instance) openQR(instance);
+    return;
+  }
   const button = event.target.closest('[data-remove]');
   if(!button){
     const row=event.target.closest('[data-instance]');
@@ -368,6 +424,94 @@ $('#rows').addEventListener('click', async event => {
     button.textContent = 'Remover';
   }
 });
+
+// --- criar instância + parear via QR ---
+let qrTimer = null;
+
+function openCreate(){
+  $('#createError').textContent = '';
+  $('#instanceName').value = '';
+  $('#createOverlay').classList.remove('hidden');
+  $('#instanceName').focus();
+}
+
+function closeCreate(){
+  $('#createOverlay').classList.add('hidden');
+}
+
+async function submitCreate(event){
+  event.preventDefault();
+  const name = $('#instanceName').value.trim();
+  $('#createError').textContent = '';
+  if(!name){ $('#createError').textContent = 'Dê um nome para a instância.'; return; }
+  const button = $('#createSubmit');
+  button.disabled = true;
+  button.textContent = 'Criando…';
+  try{
+    const instance = await request('/instances', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name})
+    });
+    closeCreate();
+    await loadInstances();
+    openQR(instance);
+  }catch(error){
+    if(error.message !== 'Não autorizado') $('#createError').textContent = error.message;
+  }finally{
+    button.disabled = false;
+    button.textContent = 'Criar e conectar';
+  }
+}
+
+function openQR(instance){
+  $('#qrTitle').textContent = `Conectar ${instance.name || 'WhatsApp'}`;
+  $('#qrBox').innerHTML = '<div class="spinner"></div>';
+  $('#qrStatus').textContent = 'Gerando o código…';
+  $('#qrStatus').classList.remove('connected');
+  $('#qrOverlay').classList.remove('hidden');
+  pollQR(instance.id);
+  clearInterval(qrTimer);
+  qrTimer = setInterval(() => pollQR(instance.id), 2500);
+}
+
+function closeQR(){
+  clearInterval(qrTimer); qrTimer = null;
+  $('#qrOverlay').classList.add('hidden');
+  loadInstances();
+}
+
+async function pollQR(id){
+  try{
+    const res = await request(`/instances/${encodeURIComponent(id)}/qr`);
+    if(res.status === 'connected'){
+      $('#qrBox').innerHTML = '<svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#25d366" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m8 12 3 3 5-6"></path></svg>';
+      $('#qrStatus').textContent = 'Conectado! Já pode fechar.';
+      $('#qrStatus').classList.add('connected');
+      clearInterval(qrTimer); qrTimer = null;
+      loadInstances();
+      return;
+    }
+    if(res.qrcode){
+      $('#qrBox').innerHTML = `<img src="${escapeHTML(res.qrcode)}" alt="QR Code de pareamento" />`;
+      $('#qrStatus').textContent = 'Aponte a câmera do WhatsApp para o código.';
+    }else{
+      $('#qrBox').innerHTML = '<div class="spinner"></div>';
+      $('#qrStatus').textContent = 'Aguardando o código…';
+    }
+  }catch(error){
+    if(error.message !== 'Não autorizado'){
+      $('#qrStatus').textContent = error.message;
+    }
+  }
+}
+
+$('#newInstance').addEventListener('click', openCreate);
+$('#createCancel').addEventListener('click', closeCreate);
+$('#createForm').addEventListener('submit', submitCreate);
+$('#createOverlay').addEventListener('click', event=>{ if(event.target === $('#createOverlay')) closeCreate(); });
+$('#qrClose').addEventListener('click', closeQR);
+$('#qrOverlay').addEventListener('click', event=>{ if(event.target === $('#qrOverlay')) closeQR(); });
 
 $('#loginForm').addEventListener('submit', async event => {
   event.preventDefault();
