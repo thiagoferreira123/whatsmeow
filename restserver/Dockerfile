@@ -11,8 +11,7 @@ ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w" -o /out/restserver ./restserver
 
 FROM alpine:3.20
-# Coolify's container health check uses curl against /health. Keep it in the
-# runtime image so Docker health reflects the service instead of a missing tool.
+# curl fica na imagem para o health check do Coolify (HTTP contra /live).
 RUN apk add --no-cache ca-certificates tzdata curl && mkdir -p /data
 WORKDIR /app
 COPY --from=build /out/restserver /app/restserver
@@ -40,4 +39,13 @@ ENV PORT=8080 \
     WHATSMEOW_DSN="file:/data/whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 EXPOSE 8080
 VOLUME ["/data"]
+
+# Liveness, NÃO readiness: /health responde 503 enquanto o container aguarda o
+# lease das sessões (só um processo é dono por vez). Num rolling update o
+# container novo sobe em standby — se o orquestrador olhasse /health, marcaria
+# como não-saudável e faria rollback, e o antigo nunca soltaria o lease:
+# nenhum deploy passaria. /live responde 200 sempre que o processo está de pé.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD curl -fsS http://127.0.0.1:8080/live >/dev/null || exit 1
+
 ENTRYPOINT ["/app/restserver"]
