@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"math/rand/v2"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ type instanceRuntime struct {
 	qrExpiresAt   time.Time
 	qrRunning     bool
 	qrCancel      context.CancelFunc
+	qrAttempt     uint64
 	loggedOut     bool      // real unlink (needs a new QR) — watchdog skips it
 	paused        bool      // intentional disconnect — watchdog must NOT reconnect
 	conflicted    bool      // another live client replaced this session
@@ -457,6 +459,7 @@ func (m *Manager) qrCode(id string) (code string, expires time.Time, status stri
 		return "", time.Time{}, "connecting", nil
 	}
 
+	var attempt uint64
 	rt.mu.Lock()
 	if !rt.qrRunning {
 		qrCtx, cancel := context.WithCancel(context.Background())
@@ -474,11 +477,13 @@ func (m *Manager) qrCode(id string) (code string, expires time.Time, status stri
 		}
 		rt.qrRunning = true
 		rt.qrCancel = cancel
+		rt.qrAttempt++
 		m.auditInstance(id, logCategoryConnection, "pairing_started", "info", InstanceLog{
 			Status: "connecting", Source: "qr",
 		})
-		go m.consumeQR(rt, qrChan)
+		go m.consumeQR(rt, rt.qrAttempt, qrChan)
 	}
+	attempt = rt.qrAttempt
 	rt.mu.Unlock()
 
 	// Wait briefly for the first code to arrive.
@@ -486,19 +491,59 @@ func (m *Manager) qrCode(id string) (code string, expires time.Time, status stri
 	for time.Now().Before(deadline) {
 		rt.mu.RLock()
 		c, exp := rt.qrCode, rt.qrExpiresAt
+		currentAttempt, running := rt.qrAttempt, rt.qrRunning
 		rt.mu.RUnlock()
+		if currentAttempt != attempt || !running {
+			return "", time.Time{}, m.statusOf(rt), nil
+		}
 		if c != "" {
 			return c, exp, "connecting", nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return "", time.Time{}, "connecting", nil
+	rt.mu.Lock()
+	if rt.qrAttempt != attempt || !rt.qrRunning {
+		rt.mu.Unlock()
+		return "", time.Time{}, m.statusOf(rt), nil
+	}
+	if rt.qrCode != "" {
+		code, expires = rt.qrCode, rt.qrExpiresAt
+		rt.mu.Unlock()
+		return code, expires, "connecting", nil
+	}
+	cancel := rt.qrCancel
+	rt.qrAttempt++ // invalidate the consumer belonging to the stalled channel
+	rt.qrRunning = false
+	rt.qrCode = ""
+	rt.qrExpiresAt = time.Time{}
+	rt.qrCancel = nil
+	rt.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	m.auditInstance(id, logCategoryConnection, "pairing_first_qr_timeout", "warning", InstanceLog{
+		Status: "disconnected", Source: "qr", Reason: "first QR event did not arrive within 5 seconds",
+	})
+	return "", time.Time{}, "", &apiError{
+		Status: http.StatusGatewayTimeout,
+		Msg:    "timed out waiting for the first QR code; retry the connection",
+	}
 }
 
-func (m *Manager) consumeQR(rt *instanceRuntime, ch <-chan whatsmeow.QRChannelItem) {
+func (m *Manager) consumeQR(rt *instanceRuntime, attempt uint64, ch <-chan whatsmeow.QRChannelItem) {
 	for evt := range ch {
+		rt.mu.RLock()
+		current := rt.qrAttempt == attempt
+		rt.mu.RUnlock()
+		if !current {
+			continue
+		}
 		if evt.Event == whatsmeow.QRChannelEventCode {
 			rt.mu.Lock()
+			if rt.qrAttempt != attempt {
+				rt.mu.Unlock()
+				continue
+			}
 			rt.qrCode = evt.Code
 			rt.qrExpiresAt = time.Now().Add(evt.Timeout)
 			rt.mu.Unlock()
@@ -507,14 +552,20 @@ func (m *Manager) consumeQR(rt *instanceRuntime, ch <-chan whatsmeow.QRChannelIt
 			})
 		} else { // success / timeout / error
 			rt.mu.Lock()
-			rt.qrCode = ""
+			if rt.qrAttempt == attempt {
+				rt.qrCode = ""
+				rt.qrExpiresAt = time.Time{}
+			}
 			rt.mu.Unlock()
 		}
 	}
 	rt.mu.Lock()
-	rt.qrRunning = false
-	rt.qrCode = ""
-	rt.qrCancel = nil
+	if rt.qrAttempt == attempt {
+		rt.qrRunning = false
+		rt.qrCode = ""
+		rt.qrExpiresAt = time.Time{}
+		rt.qrCancel = nil
+	}
 	rt.mu.Unlock()
 }
 
@@ -525,14 +576,21 @@ func (m *Manager) Disconnect(id string) error {
 		return errNotFound
 	}
 	rt.mu.Lock()
-	if rt.qrCancel != nil {
-		rt.qrCancel()
-		rt.qrCancel = nil
+	cancel := rt.qrCancel
+	if rt.qrRunning || rt.qrCode != "" || cancel != nil {
+		rt.qrAttempt++
 	}
+	rt.qrRunning = false
+	rt.qrCode = ""
+	rt.qrExpiresAt = time.Time{}
+	rt.qrCancel = nil
 	rt.meta.Status = "hibernated"
 	rt.paused = true // intentional — the watchdog must leave it down
 	in := rt.meta
 	rt.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	rt.client.Disconnect()
 	if err := m.store.Save(&in); err != nil {
 		return err

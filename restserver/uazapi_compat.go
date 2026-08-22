@@ -138,17 +138,19 @@ func (h *Handlers) uzInstanceObj(in Instance) map[string]any {
 }
 
 // uzInstanceWithQR adds the current QR (data URI) + status, starting pairing if needed.
-func (h *Handlers) uzInstanceWithQR(in Instance) map[string]any {
+func (h *Handlers) uzInstanceWithQR(in Instance) (map[string]any, error) {
 	obj := h.uzInstanceObj(in)
-	if res, err := h.mgr.QR(in.ID); err == nil {
-		if s, ok := res["status"].(string); ok {
-			obj["status"] = s
-		}
-		if q, ok := res["qrcode"].(string); ok {
-			obj["qrcode"] = q
-		}
+	res, err := h.mgr.QR(in.ID)
+	if err != nil {
+		return nil, err
 	}
-	return obj
+	if s, ok := res["status"].(string); ok {
+		obj["status"] = s
+	}
+	if q, ok := res["qrcode"].(string); ok {
+		obj["qrcode"] = q
+	}
+	return obj, nil
 }
 
 func (h *Handlers) uzInit(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +187,11 @@ func (h *Handlers) uzConnect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"instance": h.uzInstanceWithQR(in)})
+	instance, err := h.uzInstanceWithQR(in)
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"instance": instance})
 }
 
 func (h *Handlers) uzStatus(w http.ResponseWriter, r *http.Request) {
