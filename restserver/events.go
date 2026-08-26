@@ -80,7 +80,11 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 }
 
 func (m *Manager) onMessage(instanceID string, v *events.Message) {
-	if v.Info.IsFromMe || v.Info.IsGroup {
+	if v.Info.IsGroup {
+		return
+	}
+	if v.Info.IsFromMe {
+		m.onOwnMessage(instanceID, v)
 		return
 	}
 	rt := m.get(instanceID)
@@ -162,6 +166,44 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 		}
 		m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
 	}
+}
+
+// onOwnMessage entrega ecos fromMe (mensagens digitadas pelo operador humano no
+// telefone pareado OU enviadas por esta API) ao webhook POR INSTÂNCIA, para que
+// bots detectem conversa humana ativa e silenciem (human_lock no n8n).
+// wasSentByApi distingue eco do próprio bot (via sentEchoIDs) de resposta humana.
+// Instâncias sem webhook configurado seguem exatamente como antes (nenhuma
+// entrega); o webhook global (Cloud API) não recebe ecos. Grupos nunca chegam
+// aqui (filtrados no onMessage).
+func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
+	// só chats 1:1 reais — status@broadcast, newsletter etc. ficam de fora
+	if v.Info.Chat.Server != types.DefaultUserServer && v.Info.Chat.Server != types.HiddenUserServer {
+		return
+	}
+	rt := m.get(instanceID)
+	if rt == nil {
+		return
+	}
+	in := rt.metaCopy()
+	if in.WebhookURL == "" || !in.WebhookEnabled {
+		return
+	}
+	// o mesmo eco chega em todas as sessões pareadas do número; entrega uma vez
+	if !m.webhooks.dedup("own:" + v.Info.ID) {
+		return
+	}
+	msg := map[string]any{
+		"messageid":    v.Info.ID,
+		"text":         extractText(v.Message),
+		"fromMe":       true,
+		"wasSentByApi": m.wasSentByAPI(v.Info.ID),
+		"isGroup":      false,
+		"sender_pn":    "",
+		"sender":       "",
+		"chatid":       v.Info.Chat.String(),
+		"pushName":     v.Info.PushName,
+	}
+	m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
 }
 
 // digitsOnly strips everything but digits (e.g. "5511...@s.whatsapp.net" -> "5511...").

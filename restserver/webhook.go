@@ -19,13 +19,76 @@ type WebhookSender struct {
 	mu        sync.Mutex
 	seen      map[string]time.Time
 	lastSweep time.Time
+	// retryBackoff devolve a espera entre tentativas de entrega (attempt 0-based).
+	// Substituível em teste para não dormir de verdade.
+	retryBackoff func(attempt int) time.Duration
+	// onFailure é chamado quando uma entrega assíncrona esgota as tentativas sem
+	// sucesso — uma entrega perdida precisa deixar rastro (log), nunca sumir.
+	onFailure func(url string, out deliveryOutcome)
+}
+
+// webhookMaxAttempts limita as tentativas de entrega por evento.
+const webhookMaxAttempts = 3
+
+// deliveryOutcome descreve o resultado final de uma entrega de webhook.
+type deliveryOutcome struct {
+	Delivered  bool
+	Attempts   int
+	StatusCode int
+	Err        error
+}
+
+// retryableStatus: 5xx, rate limit e timeout são transitórios; 4xx é erro de
+// configuração do receptor — repetir não conserta e só esconde o problema.
+func retryableStatus(code int) bool {
+	return code >= 500 || code == http.StatusTooManyRequests || code == http.StatusRequestTimeout
+}
+
+// deliverSync POSTa body em url e devolve o desfecho (sem goroutine, sem log).
+func (ws *WebhookSender) deliverSync(url, secret string, body []byte) deliveryOutcome {
+	var out deliveryOutcome
+	for attempt := 0; attempt < webhookMaxAttempts; attempt++ {
+		out.Attempts = attempt + 1
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			out.Err = err
+			return out
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if secret != "" {
+			req.Header.Set("x-uazapi-secret", secret)
+		}
+		resp, err := ws.client.Do(req)
+		if err != nil {
+			out.Err = err
+			if attempt < webhookMaxAttempts-1 {
+				time.Sleep(ws.retryBackoff(attempt))
+			}
+			continue
+		}
+		resp.Body.Close()
+		out.StatusCode = resp.StatusCode
+		out.Err = nil
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			out.Delivered = true
+			return out
+		}
+		if !retryableStatus(resp.StatusCode) {
+			return out
+		}
+		if attempt < webhookMaxAttempts-1 {
+			time.Sleep(ws.retryBackoff(attempt))
+		}
+	}
+	return out
 }
 
 func NewWebhookSender() *WebhookSender {
 	return &WebhookSender{
-		client:    &http.Client{Timeout: 15 * time.Second},
-		seen:      make(map[string]time.Time),
-		lastSweep: time.Now(),
+		client:       &http.Client{Timeout: 15 * time.Second},
+		seen:         make(map[string]time.Time),
+		lastSweep:    time.Now(),
+		retryBackoff: func(attempt int) time.Duration { return time.Duration(attempt+1) * time.Second },
 	}
 }
 
@@ -54,7 +117,8 @@ func (ws *WebhookSender) dedup(id string) bool {
 	return true
 }
 
-// deliver POSTs the payload to url asynchronously, retrying up to 3 times.
+// deliver POSTs the payload to url asynchronously (até webhookMaxAttempts
+// tentativas). Falha definitiva é reportada via onFailure — nunca engolida.
 func (ws *WebhookSender) deliver(url, secret string, payload any) {
 	if url == "" {
 		return
@@ -64,23 +128,9 @@ func (ws *WebhookSender) deliver(url, secret string, payload any) {
 		return
 	}
 	go func() {
-		for attempt := 0; attempt < 3; attempt++ {
-			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-			if err != nil {
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-			if secret != "" {
-				req.Header.Set("x-uazapi-secret", secret)
-			}
-			resp, err := ws.client.Do(req)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode < 500 {
-					return // delivered (or a non-retryable 4xx)
-				}
-			}
-			time.Sleep(time.Duration(attempt+1) * time.Second)
+		out := ws.deliverSync(url, secret, body)
+		if !out.Delivered && ws.onFailure != nil {
+			ws.onFailure(url, out)
 		}
 	}()
 }
@@ -166,7 +216,7 @@ func (ws *WebhookSender) deliverCloudAPI(url, appSecret string, payload any) {
 					return
 				}
 			}
-			time.Sleep(time.Duration(attempt+1) * time.Second)
+			time.Sleep(ws.retryBackoff(attempt))
 		}
 	}()
 }

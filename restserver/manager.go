@@ -74,7 +74,51 @@ type Manager struct {
 	gwMu sync.RWMutex
 	gw   GlobalWebhook // single global webhook (WhatsApp Cloud API style)
 
+	// sentEchoIDs registra os IDs de mensagens enviadas POR ESTA API para que o
+	// eco fromMe correspondente seja classificado como wasSentByApi=true no
+	// webhook por instância. O ID é registrado ANTES do envio (o eco pode chegar
+	// antes do response). TTL curto; perda no restart só degrada para
+	// wasSentByApi=false (lado seguro: bots silenciam).
+	sentEchoMu  sync.Mutex
+	sentEchoIDs map[string]time.Time
+
 	runtimeActive atomic.Bool
+}
+
+const sentEchoTTL = 2 * time.Hour
+
+// recordSentEchoID marks id as sent by this API. Prunes expired entries lazily.
+func (m *Manager) recordSentEchoID(id string) {
+	if id == "" {
+		return
+	}
+	m.sentEchoMu.Lock()
+	defer m.sentEchoMu.Unlock()
+	if len(m.sentEchoIDs) > 4096 {
+		cutoff := time.Now().Add(-sentEchoTTL)
+		for k, t := range m.sentEchoIDs {
+			if t.Before(cutoff) {
+				delete(m.sentEchoIDs, k)
+			}
+		}
+	}
+	m.sentEchoIDs[id] = time.Now()
+}
+
+// wasSentByAPI reports whether the fromMe echo id belongs to an API-originated send.
+func (m *Manager) wasSentByAPI(id string) bool {
+	m.sentEchoMu.Lock()
+	defer m.sentEchoMu.Unlock()
+	t, ok := m.sentEchoIDs[id]
+	return ok && time.Since(t) < sentEchoTTL
+}
+
+// sendRecorded sends msg with a pre-generated message ID already registered in
+// sentEchoIDs, so the fromMe echo never races the classification.
+func (m *Manager) sendRecorded(ctx context.Context, rt *instanceRuntime, jid types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
+	msgID := rt.client.GenerateMessageID()
+	m.recordSentEchoID(msgID)
+	return rt.client.SendMessage(ctx, jid, msg, whatsmeow.SendRequestExtra{ID: msgID})
 }
 
 func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waLog.Logger) *Manager {
@@ -94,9 +138,14 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 		webhooks:   NewWebhookSender(),
 		outbound:   newOutboundGuard(cfg),
 		log:        log,
-		connectSem: make(chan struct{}, conc),
-		sendSem:    make(chan struct{}, sendConc),
-		jidCache:   make(map[string]jidCacheEntry),
+		connectSem:  make(chan struct{}, conc),
+		sendSem:     make(chan struct{}, sendConc),
+		jidCache:    make(map[string]jidCacheEntry),
+		sentEchoIDs: make(map[string]time.Time),
+	}
+	m.webhooks.onFailure = func(url string, out deliveryOutcome) {
+		log.Warnf("webhook delivery failed after %d attempts (status=%d err=%v) url=%s",
+			out.Attempts, out.StatusCode, out.Err, url)
 	}
 	m.loadGlobalWebhook()
 	m.runtimeActive.Store(true)
@@ -872,7 +921,7 @@ func (m *Manager) SendText(ctx context.Context, id, number, text string) (messag
 	if err := m.checkOutbound(ctx, id, recipient); err != nil {
 		return "", err
 	}
-	resp, err := rt.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
+	resp, err := m.sendRecorded(ctx, rt, jid, &waE2E.Message{Conversation: proto.String(text)})
 	if err != nil {
 		m.stats.sendFailures.Add(1)
 		return "", err
@@ -906,7 +955,7 @@ func (m *Manager) sendTextJID(ctx context.Context, id string, jid types.JID, tex
 		return "", err
 	}
 	defer m.releaseSendSlot()
-	resp, err := rt.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
+	resp, err := m.sendRecorded(ctx, rt, jid, &waE2E.Message{Conversation: proto.String(text)})
 	if err != nil {
 		m.stats.sendFailures.Add(1)
 		return "", err
@@ -952,7 +1001,7 @@ func (m *Manager) SendMedia(ctx context.Context, id, number, mediaType, file, ca
 		m.stats.sendFailures.Add(1)
 		return "", err
 	}
-	resp, err := rt.client.SendMessage(ctx, jid, msg)
+	resp, err := m.sendRecorded(ctx, rt, jid, msg)
 	if err != nil {
 		m.stats.sendFailures.Add(1)
 		return "", err
@@ -999,7 +1048,7 @@ func (m *Manager) SendMediaBytes(ctx context.Context, id, number, mediaType stri
 		m.stats.sendFailures.Add(1)
 		return "", err
 	}
-	resp, err := rt.client.SendMessage(ctx, jid, msg)
+	resp, err := m.sendRecorded(ctx, rt, jid, msg)
 	if err != nil {
 		m.stats.sendFailures.Add(1)
 		return "", err
