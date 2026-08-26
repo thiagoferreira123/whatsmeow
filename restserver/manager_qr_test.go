@@ -4,39 +4,44 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store"
 )
 
-func TestConnectEndpointTimesOutAndCancelsStalledFirstQR(t *testing.T) {
-	manager, _ := testPolicyManager(t, Config{})
-	runtime := manager.get("instance-1")
-	manager.attachClient(runtime, &store.Device{})
+// Um loop de pareamento travado deixava TODO pedido seguinte esperar 5s e sair
+// 504 para sempre. Agora ele é descartado e o mesmo pedido já devolve QR novo.
+func TestConnectEndpointRestartsStalledFirstQRInsteadOfTimingOut(t *testing.T) {
+	cfg := qrTestConfig()
+	manager := testUazapiCompatManager(t, cfg)
+	stubPairing(t, manager, "codigo-http-pos-travamento")
+	instance, err := manager.Create("nutricionist_1", "1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := manager.get(instance.ID)
+	manager.attachClient(runtime, manager.container.NewDevice())
+
 	qrContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	runtime.mu.Lock()
 	runtime.qrRunning = true
+	runtime.qrStartedAt = time.Now().Add(-time.Minute)
 	runtime.qrCancel = cancel
 	runtime.mu.Unlock()
 
 	request := httptest.NewRequest(http.MethodPost, "/instance/connect", nil)
-	request.Header.Set("token", "token")
+	request.Header.Set("token", instance.Token)
 	response := httptest.NewRecorder()
-	NewHandlers(manager, Config{}).Router().ServeHTTP(response, request)
+	NewHandlers(manager, cfg).Router().ServeHTTP(response, request)
 
-	if response.Code != http.StatusGatewayTimeout {
-		t.Errorf("POST /instance/connect status = %d; want %d", response.Code, http.StatusGatewayTimeout)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /instance/connect status = %d; want %d (body=%s)", response.Code, http.StatusOK, response.Body.String())
 	}
-
-	runtime.mu.RLock()
-	running, activeCancel := runtime.qrRunning, runtime.qrCancel
-	runtime.mu.RUnlock()
-	if running || activeCancel != nil {
-		t.Fatalf("stalled QR attempt remained active: running=%v cancelSet=%v", running, activeCancel != nil)
+	if !strings.Contains(response.Body.String(), "data:image/png;base64,") {
+		t.Fatalf("resposta sem QR: %s", response.Body.String())
 	}
 
 	select {

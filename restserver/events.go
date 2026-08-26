@@ -58,6 +58,13 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 			m.onConnected(instanceID)
 		case *events.PairSuccess:
 			m.onPairSuccess(instanceID, v)
+		case *events.PairError:
+			m.onPairError(instanceID, v)
+		case *events.QRScannedWithoutMultidevice:
+			m.auditInstance(instanceID, logCategoryConnection, "qr_scanned_without_multidevice", "warning", InstanceLog{
+				Status: "connecting", Source: "qr",
+				Reason: "aparelho sem multidispositivo; o mesmo QR continua válido após habilitar",
+			})
 		case *events.LoggedOut:
 			m.onLoggedOut(instanceID, v)
 		case *events.StreamReplaced:
@@ -351,6 +358,31 @@ func (m *Manager) onPairSuccess(instanceID string, v *events.PairSuccess) {
 	_ = m.store.Save(&in)
 	m.auditInstance(instanceID, logCategoryConnection, "paired", "info", InstanceLog{
 		Status: "connected", Source: "qr", Details: map[string]any{"owner": in.Owner, "businessName": v.BusinessName},
+	})
+}
+
+// onPairError trata a falha tardia de pareamento. A lib apaga o device local
+// quando o pair-device-sign falha (pair.go:216-221,244-247) — mesmo estado do
+// 401, mas SEM emitir LoggedOut, então é aqui que o device precisa ser
+// reciclado para o próximo QR não morrer com ErrDeviceDeleted.
+func (m *Manager) onPairError(instanceID string, v *events.PairError) {
+	rt := m.get(instanceID)
+	if rt == nil {
+		return
+	}
+	reason := ""
+	if v != nil && v.Error != nil {
+		reason = v.Error.Error()
+	}
+	rt.mu.Lock()
+	rt.meta.Status = "disconnected"
+	rt.resetting = false
+	in := rt.meta
+	rt.mu.Unlock()
+	m.attachClient(rt, m.container.NewDevice())
+	_ = m.store.Save(&in)
+	m.auditInstance(instanceID, logCategoryConnection, "pair_error", "error", InstanceLog{
+		Status: "disconnected", Source: "qr", Reason: reason,
 	})
 }
 

@@ -195,7 +195,7 @@ func (h *Handlers) deleteInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) getQR(w http.ResponseWriter, r *http.Request) {
-	res, err := h.mgr.QR(r.PathValue("id"))
+	res, err := h.mgr.QR(r.Context(), r.PathValue("id"))
 	if handleErr(w, err) {
 		return
 	}
@@ -203,7 +203,7 @@ func (h *Handlers) getQR(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) getQRPNG(w http.ResponseWriter, r *http.Request) {
-	png, err := h.mgr.QRPNG(r.PathValue("id"))
+	png, err := h.mgr.QRPNG(r.Context(), r.PathValue("id"))
 	if handleErr(w, err) {
 		return
 	}

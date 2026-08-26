@@ -12,12 +12,13 @@ import (
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
 // testManagerWithDeviceStore builds a Manager over an in-memory SQLite holding
 // BOTH the instances table and whatsmeow's device store — the same single-DB
 // layout main.go uses in production.
-func testManagerWithDeviceStore(t *testing.T) (*Manager, *instanceRuntime) {
+func testManagerWithDeviceStore(t *testing.T, cfg Config) (*Manager, *instanceRuntime) {
 	t.Helper()
 	dsn := fmt.Sprintf("file:loggedout-%d?mode=memory&cache=shared&_pragma=foreign_keys(on)", time.Now().UnixNano())
 	db, err := sql.Open("sqlite", dsn)
@@ -44,7 +45,9 @@ func testManagerWithDeviceStore(t *testing.T) (*Manager, *instanceRuntime) {
 		runtimes:  map[string]*instanceRuntime{in.ID: rt},
 		container: container,
 		store:     instanceStore,
-		outbound:  newOutboundGuard(Config{}),
+		cfg:       cfg,
+		outbound:  newOutboundGuard(cfg),
+		log:       waLog.Noop,
 	}
 	m.SetRuntimeActive(true)
 	return m, rt
@@ -61,7 +64,7 @@ func testManagerWithDeviceStore(t *testing.T) (*Manager, *instanceRuntime) {
 // fica presa até o processo reiniciar.
 func TestLoggedOutRecyclesDeviceSoANewQRCanBeGenerated(t *testing.T) {
 	ctx := context.Background()
-	m, rt := testManagerWithDeviceStore(t)
+	m, rt := testManagerWithDeviceStore(t, Config{})
 
 	device := m.container.NewDevice()
 	jid := types.NewJID("5531920023640", types.DefaultUserServer)

@@ -171,9 +171,11 @@ Quando o DietSystem é responsável por confirmar/cancelar a consulta, use
   (noise/identity/signed-pre-key, registration_id, jid), `whatsmeow_sessions`,
   `whatsmeow_pre_keys`, `whatsmeow_sender_keys`, `whatsmeow_app_state_sync_keys` (estas evitam
   re-sync). Restart **não** pede QR de novo — `LoadAll` recarrega e reconecta do banco.
-- **Auto-reconnect do whatsmeow** ligado explicitamente (`EnableAutoReconnect` +
-  `InitialAutoReconnect` em `manager.go attachClient`): queda de socket re-disca e re-autentica
-  das keys, **sem QR**. Keepalive a cada 20–30s; reconecta se falhar >3 min. (O `Got 515 code,
+- **Auto-reconnect do whatsmeow** ligado explicitamente em `manager.go attachClient`:
+  `EnableAutoReconnect` sempre; `InitialAutoReconnect` **só para device já pareado** (com
+  `Store.ID == nil` o autoReconnect da lib é no-op e a flag apenas engoliria o erro de dial do
+  pareamento, virando espera muda por um QR). Queda de socket re-disca e re-autentica das keys,
+  **sem QR**. Keepalive a cada 20–30s; reconecta se falhar >3 min. (O `Got 515 code,
   reconnecting` no log é normal, é o reconnect pós-pareamento.)
 - **Watchdog** (`WATCHDOG_SECONDS`, padrão 30s): rede de segurança que reconecta instâncias
   pareadas que ficaram caídas (cobre falha de conexão no boot e conflitos). **Respeita o
@@ -181,6 +183,32 @@ Quando o DietSystem é responsável por confirmar/cancelar a consulta, use
   backoff em `stream_replaced`**.
 - **Não recupera sozinho** (exigem ação): logout/aparelho removido pelo celular, `stream_replaced`
   (mesma sessão em 2 lugares — **rode só 1 processo por sessão/DB**), client desatualizado, ban.
+  A "ação" é sempre a mesma: pedir o QR (ver abaixo).
+
+## QR: só instância conectada fica sem código
+
+`POST /instance/connect` e `GET /instances/{id}/qr` só respondem **sem QR** quando a instância
+está conectada **e** logada. Todo o resto se cura na própria requisição (`manager.go qrCode` +
+`qr_state.go planQRRequest`): hibernada e conflitada têm os freios soltos e persistidos (senão
+`LoadAll` os recria no boot), device apagado por 401/403/406 ou `PairError` é trocado por um
+virgem, socket zumbi é derrubado antes do `GetQRChannel` (que exige `!IsConnected()`), e loop de
+pareamento travado é descartado em vez de virar 504 eterno.
+
+Sessão ainda salva porém offline é tratada à parte: o servidor tenta reconectar por
+`QR_REVIVE_SECONDS`; se voltar responde `connected`, se não voltar **descarta o vínculo**
+(`Logout` → unlink remoto best-effort + device novo) e devolve QR na mesma resposta. Fica
+auditado como `qr_revive_attempt` + `qr_forced_relink`.
+
+| env | padrão | papel |
+|---|---|---|
+| `QR_REVIVE_SECONDS` | 8 | janela para ressuscitar a sessão salva (0 = descarta na hora) |
+| `QR_FIRST_CODE_WAIT_SECONDS` | 5 | espera pelo primeiro código antes de responder 503 retryable |
+| `QR_STALL_SECONDS` | 10 | idade a partir da qual um pareamento sem código é dado como travado |
+| `QR_KEEP_SESSION_ON_REVIVE_FAILURE` | false | kill-switch: `true` preserva o vínculo e volta ao comportamento antigo (sem QR) |
+
+Erros que sobram: **404** (id inexistente), **503 + `Retry-After`** (container em standby, ou
+WhatsApp inalcançável — `pairing_unavailable`) e **409** só em `/qr.png`, que não tem corpo JSON
+para carregar o `status`. Não existe mais 504 nem 500 cru nesse fluxo.
 - **SQLite em WAL** agora. **Produção:** trocar `WHATSMEOW_DSN` por Postgres e rodar sob
   **systemd / Docker `restart: always`** (crash reinicia e `LoadAll` reconecta tudo).
 

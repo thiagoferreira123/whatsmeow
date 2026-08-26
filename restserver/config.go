@@ -37,6 +37,14 @@ type Config struct {
 	InstanceLogCleanupMinutes int  // cleanup worker interval
 	RuntimeLeaseTTLSeconds    int  // singleton lease TTL shared by rolling containers
 	RuntimeLeaseRetrySeconds  int  // standby polling/heartbeat interval
+
+	// Pareamento por QR. A regra do produto é que só instância conectada E
+	// logada pode ficar sem QR; estes três controlam quanto o servidor tenta
+	// salvar a sessão existente antes de descartá-la em favor de um código novo.
+	QRReviveSeconds              int  // janela para ressuscitar sessão salva (0 = descarta na hora)
+	QRFirstCodeWaitSeconds       int  // espera pelo primeiro código do canal de QR
+	QRStallSeconds               int  // idade a partir da qual um pareamento sem código é dado como travado
+	QRKeepSessionOnReviveFailure bool // kill-switch: true volta a só reconectar, sem descartar o vínculo
 }
 
 func loadConfig() Config {
@@ -77,6 +85,12 @@ func loadConfig() Config {
 		InstanceLogCleanupMinutes: getenvInt("INSTANCE_LOG_CLEANUP_INTERVAL_MINUTES", 60),
 		RuntimeLeaseTTLSeconds:    getenvInt("RUNTIME_LEASE_TTL_SECONDS", 30),
 		RuntimeLeaseRetrySeconds:  getenvInt("RUNTIME_LEASE_RETRY_SECONDS", 2),
+		QRReviveSeconds:           getenvInt("QR_REVIVE_SECONDS", 8),
+		QRFirstCodeWaitSeconds:    getenvInt("QR_FIRST_CODE_WAIT_SECONDS", 5),
+		QRStallSeconds:            getenvInt("QR_STALL_SECONDS", 10),
+		// Padrão: sessão que não volta na janela é descartada para dar lugar a um
+		// QR novo. `true` mantém o vínculo e volta ao comportamento antigo.
+		QRKeepSessionOnReviveFailure: getenvBool("QR_KEEP_SESSION_ON_REVIVE_FAILURE", false),
 	}
 }
 

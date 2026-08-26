@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -138,12 +139,15 @@ func (h *Handlers) uzInstanceObj(in Instance) map[string]any {
 }
 
 // uzInstanceWithQR adds the current QR (data URI) + status, starting pairing if needed.
-func (h *Handlers) uzInstanceWithQR(in Instance) (map[string]any, error) {
-	obj := h.uzInstanceObj(in)
-	res, err := h.mgr.QR(in.ID)
+func (h *Handlers) uzInstanceWithQR(ctx context.Context, in Instance) (map[string]any, error) {
+	// O QR vem PRIMEIRO: ele cura o estado (solta hibernação/conflito, recicla
+	// device). Montar o objeto antes devolveria uma foto que já não existe mais
+	// — QR na mão e `hibernated: true` na mesma resposta.
+	res, err := h.mgr.QR(ctx, in.ID)
 	if err != nil {
 		return nil, err
 	}
+	obj := h.uzInstanceObj(in)
 	if s, ok := res["status"].(string); ok {
 		obj["status"] = s
 	}
@@ -187,7 +191,7 @@ func (h *Handlers) uzConnect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	instance, err := h.uzInstanceWithQR(in)
+	instance, err := h.uzInstanceWithQR(r.Context(), in)
 	if handleErr(w, err) {
 		return
 	}

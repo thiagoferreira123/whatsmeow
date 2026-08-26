@@ -33,6 +33,7 @@ type instanceRuntime struct {
 	qrRunning     bool
 	qrCancel      context.CancelFunc
 	qrAttempt     uint64
+	qrStartedAt   time.Time // início da tentativa de pareamento em voo (detecta loop travado)
 	loggedOut     bool      // real unlink (needs a new QR) — watchdog skips it
 	paused        bool      // intentional disconnect — watchdog must NOT reconnect
 	conflicted    bool      // another live client replaced this session
@@ -85,7 +86,47 @@ type Manager struct {
 	// history: colheita opt-in de HistorySync para mineração de base (history.go)
 	history *historyHarvester
 
+	// Costuras do pareamento: são as DUAS únicas chamadas de I/O do fluxo de QR.
+	// nil = produção (chama a lib direto); os testes substituem para não discar
+	// para o WhatsApp de verdade. Escritas só na construção do Manager.
+	openQRChannelFn func(context.Context, *whatsmeow.Client) (<-chan whatsmeow.QRChannelItem, error)
+	dialFn          func(*whatsmeow.Client) error
+
 	runtimeActive atomic.Bool
+}
+
+func (m *Manager) openQRChannel(ctx context.Context, cli *whatsmeow.Client) (<-chan whatsmeow.QRChannelItem, error) {
+	if m.openQRChannelFn != nil {
+		return m.openQRChannelFn(ctx, cli)
+	}
+	return cli.GetQRChannel(ctx)
+}
+
+func (m *Manager) dial(cli *whatsmeow.Client) error {
+	if m.dialFn != nil {
+		return m.dialFn(cli)
+	}
+	return cli.Connect()
+}
+
+// reviveWindow: 0 significa DESLIGADO (descarta o vínculo na hora), não default.
+// Errar para o lado de gerar QR é o comportamento seguro.
+func (m *Manager) reviveWindow() time.Duration {
+	return time.Duration(m.cfg.QRReviveSeconds) * time.Second
+}
+
+func (m *Manager) firstCodeWait() time.Duration {
+	if m.cfg.QRFirstCodeWaitSeconds <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(m.cfg.QRFirstCodeWaitSeconds) * time.Second
+}
+
+func (m *Manager) stallAfter() time.Duration {
+	if m.cfg.QRStallSeconds <= 0 {
+		return 10 * time.Second
+	}
+	return time.Duration(m.cfg.QRStallSeconds) * time.Second
 }
 
 const sentEchoTTL = 2 * time.Hour
@@ -124,6 +165,16 @@ func (m *Manager) sendRecorded(ctx context.Context, rt *instanceRuntime, jid typ
 	return rt.client.SendMessage(ctx, jid, msg, whatsmeow.SendRequestExtra{ID: msgID})
 }
 
+// clientLogout tenta o unlink remoto tolerando runtime sem client/store — a
+// lib faz deref direto em cli.Store.ID, e o caminho de auto-cura do QR pode
+// chegar aqui com o device já apagado.
+func (m *Manager) clientLogout(ctx context.Context, cli *whatsmeow.Client) error {
+	if cli == nil || cli.Store == nil || cli.Store.ID == nil {
+		return whatsmeow.ErrNotLoggedIn
+	}
+	return cli.Logout(ctx)
+}
+
 // Logout desvincula a sessão do WhatsApp (some de "Aparelhos conectados") e
 // prepara um device NOVO para re-pareamento por QR — preservando a linha da
 // instância (id, token, webhook). Se o unlink remoto falhar (ex.: sessão
@@ -134,24 +185,21 @@ func (m *Manager) Logout(ctx context.Context, id string) (map[string]any, error)
 	if rt == nil {
 		return nil, errNotFound
 	}
-	rt.mu.Lock()
+	m.invalidateQR(rt)
+	rt.mu.RLock()
 	cli := rt.client
-	if cancel := rt.qrCancel; cancel != nil {
-		cancel()
-		rt.qrCancel = nil
-	}
-	rt.qrRunning = false
-	rt.qrCode = ""
-	rt.mu.Unlock()
+	rt.mu.RUnlock()
 
 	remote := true
-	if err := cli.Logout(ctx); err != nil {
+	if err := m.clientLogout(ctx, cli); err != nil {
 		remote = false
 		m.log.Warnf("instance %s: logout remoto falhou (%v); descartando sessão local mesmo assim", id, err)
-		cli.Disconnect()
-		if cli.Store != nil && cli.Store.ID != nil {
-			if derr := cli.Store.Delete(ctx); derr != nil {
-				m.log.Warnf("instance %s: falha ao apagar device local: %v", id, derr)
+		if cli != nil {
+			cli.Disconnect()
+			if cli.Store != nil && cli.Store.ID != nil {
+				if derr := cli.Store.Delete(ctx); derr != nil {
+					m.log.Warnf("instance %s: falha ao apagar device local: %v", id, derr)
+				}
 			}
 		}
 	}
@@ -243,14 +291,46 @@ func (m *Manager) get(id string) *instanceRuntime {
 	return m.runtimes[id]
 }
 
+// invalidateQR mata a tentativa de pareamento em voo: invalida o consumidor
+// (qrAttempt), zera o código e cancela o contexto do canal de QR. O cancel roda
+// FORA do lock — ele chega até o socket da lib.
+func (m *Manager) invalidateQR(rt *instanceRuntime) {
+	rt.mu.Lock()
+	cancel := rt.qrCancel
+	rt.qrAttempt++
+	rt.qrRunning = false
+	rt.qrCode = ""
+	rt.qrExpiresAt = time.Time{}
+	rt.qrStartedAt = time.Time{}
+	rt.qrCancel = nil
+	rt.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// attachClient é o ÚNICO ponto de troca de client de uma instância. Além de
+// instalar o novo, ele descarta por completo o anterior: sem isso o client
+// velho seguia conectado despachando eventos no MESMO handler da instância, e o
+// loop de QR órfão fazia todo pedido seguinte esperar por um código que nunca
+// chegaria.
 func (m *Manager) attachClient(rt *instanceRuntime, device *store.Device) {
 	cli := whatsmeow.NewClient(device, m.log)
-	cli.EnableAutoReconnect = true  // recover from socket drops without a new QR (default true)
-	cli.InitialAutoReconnect = true // also retry in background if the FIRST connect fails (default false)
-	cli.AddEventHandler(m.makeHandler(rt.meta.ID))
+	cli.EnableAutoReconnect = true // recover from socket drops without a new QR (default true)
+	// Só faz sentido para device pareado: com Store.ID nil o autoReconnect da lib
+	// é no-op (client.go:606-609), então a flag apenas engoliria o erro de dial do
+	// pareamento e transformaria a falha em espera muda por um QR.
+	cli.InitialAutoReconnect = device != nil && device.ID != nil
+	cli.AddEventHandler(m.makeHandler(rt.metaCopy().ID))
+
+	m.invalidateQR(rt)
 	rt.mu.Lock()
+	previous := rt.client
 	rt.client = cli
 	rt.mu.Unlock()
+	if previous != nil && previous != cli {
+		go previous.Disconnect() // pega o socketLock da lib: nunca sob rt.mu
+	}
 }
 
 // StartWatchdog periodically re-Connects paired instances that are down. It's a
@@ -507,8 +587,8 @@ func (m *Manager) StatusDetail(id string) (map[string]any, error) {
 
 // QR returns the current QR (as a PNG data URI) and raw code, starting the
 // pairing flow if needed. If already paired/connected it reports the status.
-func (m *Manager) QR(id string) (map[string]any, error) {
-	code, expires, status, err := m.qrCode(id)
+func (m *Manager) QR(ctx context.Context, id string) (map[string]any, error) {
+	code, expires, status, err := m.qrCode(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -525,8 +605,8 @@ func (m *Manager) QR(id string) (map[string]any, error) {
 }
 
 // QRPNG returns the raw PNG bytes of the current QR code (for browser preview).
-func (m *Manager) QRPNG(id string) ([]byte, error) {
-	code, _, _, err := m.qrCode(id)
+func (m *Manager) QRPNG(ctx context.Context, id string) ([]byte, error) {
+	code, _, _, err := m.qrCode(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -536,106 +616,353 @@ func (m *Manager) QRPNG(id string) ([]byte, error) {
 	return qrcode.Encode(code, qrcode.Medium, 512)
 }
 
-// qrCode ensures the pairing loop is running and returns the latest code.
-func (m *Manager) qrCode(id string) (code string, expires time.Time, status string, err error) {
+var (
+	// errPairingInFlight: outra requisição ganhou a corrida da reserva.
+	errPairingInFlight = errors.New("pairing already in flight")
+	// errPairingSuperseded: a tentativa foi invalidada no meio (troca de client,
+	// disconnect, delete). Re-planejar é o certo.
+	errPairingSuperseded = errors.New("pairing attempt superseded")
+)
+
+// qrCode garante que um pedido de QR termine em código sempre que a instância
+// NÃO estiver conectada e logada — hibernada, conflitada, com device apagado,
+// com socket zumbi ou com um loop de pareamento travado inclusive.
+//
+// Cada volta aplica UMA ação de cura (planQRRequest) e reduz estritamente o
+// espaço de estados, então o laço converge bem antes de qrMaxPlanSteps.
+func (m *Manager) qrCode(ctx context.Context, id string) (code string, expires time.Time, status string, err error) {
 	rt := m.get(id)
 	if rt == nil {
 		return "", time.Time{}, "", errNotFound
 	}
+	brakesReleased := false
+	for step := 0; step < qrMaxPlanSteps; step++ {
+		snap, cli := m.snapshotQR(rt)
+		action := planQRRequest(snap)
+		if action == qrReportConnected {
+			return "", time.Time{}, "connected", nil
+		}
+		// Pedir QR é uma ordem explícita de trazer a instância de volta: nenhum
+		// freio (hibernação, conflito, backoff) sobrevive a isso.
+		if !brakesReleased {
+			m.releaseBrakes(rt, id)
+			brakesReleased = true
+		}
+
+		switch action {
+		case qrRecycleDevice:
+			if !m.recycleDevice(rt, id, "device inutilizável para parear") {
+				return "", time.Time{}, "", m.pairingUnavailable(id, errors.New("device store indisponível"))
+			}
+
+		case qrReviveSession:
+			if m.reviveSession(ctx, rt, cli, id) {
+				return "", time.Time{}, "connected", nil
+			}
+			if m.cfg.QRKeepSessionOnReviveFailure {
+				return "", time.Time{}, "connecting", nil // kill-switch: preserva o vínculo
+			}
+			m.discardLink(ctx, id)
+
+		case qrDropSocket:
+			if cli != nil {
+				cli.Disconnect() // GetQRChannel exige socket fechado
+			}
+
+		case qrRestartPairing:
+			m.invalidateQR(rt)
+
+		case qrServeCurrent, qrStartPairing:
+			if action == qrStartPairing {
+				perr := m.startPairing(rt, cli, id)
+				switch {
+				case perr == nil, errors.Is(perr, errPairingInFlight):
+					// segue para a espera do primeiro código
+				case errors.Is(perr, errPairingSuperseded):
+					continue
+				case m.recoverFromPairErr(rt, cli, id, perr):
+					continue
+				default:
+					return "", time.Time{}, "", m.pairingUnavailable(id, perr)
+				}
+			}
+			c, exp, outcome := m.awaitFirstQR(ctx, rt)
+			switch outcome {
+			case qrAwaitGot:
+				return c, exp, "connecting", nil
+			case qrAwaitSuperseded:
+				continue
+			default:
+				m.invalidateQR(rt)
+				m.auditInstance(id, logCategoryConnection, "pairing_first_qr_timeout", "warning", InstanceLog{
+					Status: "disconnected", Source: "qr",
+					Reason: "primeiro código não chegou na janela; tentativa descartada",
+				})
+				return "", time.Time{}, "", &apiError{
+					Status:     http.StatusServiceUnavailable,
+					RetryAfter: 2,
+					Msg:        "não foi possível gerar o QR agora; tente novamente",
+				}
+			}
+		}
+	}
+	return "", time.Time{}, "", m.pairingUnavailable(id, errors.New("estado do pareamento não convergiu"))
+}
+
+// snapshotQR fotografa o estado para a decisão. Os campos do runtime saem sob
+// RLock; os métodos do client são chamados FORA dele (pegam o socketLock da lib,
+// e o caminho inverso — evento → handler → rt.mu — fecharia um deadlock).
+func (m *Manager) snapshotQR(rt *instanceRuntime) (qrSnapshot, *whatsmeow.Client) {
+	rt.mu.RLock()
 	cli := rt.client
-	if cli.IsConnected() && cli.IsLoggedIn() {
-		return "", time.Time{}, "connected", nil
+	snap := qrSnapshot{
+		qrRunning:  rt.qrRunning,
+		hasCode:    rt.qrCode != "",
+		stallAfter: m.stallAfter(),
 	}
-	// Already registered (has identity) but offline: just reconnect, no QR.
-	if cli.Store.ID != nil {
-		rt.mu.Lock()
-		rt.paused = false // user asked to bring it back — re-enable the watchdog
-		rt.conflicted = false
-		rt.nextConnectAt = time.Time{}
-		rt.mu.Unlock()
-		if !cli.IsConnected() {
-			go func() { _ = cli.Connect() }()
-		}
-		return "", time.Time{}, "connecting", nil
+	if !rt.qrStartedAt.IsZero() {
+		snap.qrAge = time.Since(rt.qrStartedAt)
 	}
+	rt.mu.RUnlock()
 
-	var attempt uint64
-	rt.mu.Lock()
-	if !rt.qrRunning {
-		// Full history sync SÓ para instâncias na lista de colheita — pareamentos
-		// normais (nutricionist_*) não são afetados. DeviceProps é global da lib,
-		// então o valor vale para o pareamento iniciado agora; corrida entre dois
-		// pareamentos simultâneos é aceitável (raro e o efeito é só sync mais lento).
-		harvest := m.history != nil && m.history.enabledFor(rt.meta)
-		store.DeviceProps.RequireFullSync = proto.Bool(harvest)
-		if harvest {
-			m.log.Infof("instance %s: pareamento com RequireFullSync=true (colheita de histórico)", id)
-		}
-		qrCtx, cancel := context.WithCancel(context.Background())
-		qrChan, qerr := cli.GetQRChannel(qrCtx)
-		if qerr != nil {
-			cancel()
-			rt.mu.Unlock()
-			go func() { _ = cli.Connect() }()
-			return "", time.Time{}, "connecting", nil
-		}
-		if cerr := cli.Connect(); cerr != nil {
-			cancel()
-			rt.mu.Unlock()
-			return "", time.Time{}, "", cerr
-		}
-		rt.qrRunning = true
-		rt.qrCancel = cancel
-		rt.qrAttempt++
-		m.auditInstance(id, logCategoryConnection, "pairing_started", "info", InstanceLog{
-			Status: "connecting", Source: "qr",
-		})
-		go m.consumeQR(rt, rt.qrAttempt, qrChan)
+	switch {
+	case cli == nil:
+		snap.clientNil = true
+	case cli.Store == nil:
+		snap.storeNil = true
+	default:
+		snap.deviceDeleted = cli.Store.Deleted
+		snap.hasSession = cli.Store.ID != nil
+		snap.connected = cli.IsConnected()
+		snap.loggedIn = cli.IsLoggedIn()
 	}
-	attempt = rt.qrAttempt
+	return snap, cli
+}
+
+// releaseBrakes solta tudo que impediria a instância de voltar: hibernação,
+// conflito e backoff do watchdog. Persiste quando o meta muda, porque LoadAll
+// reconstrói `paused` de Status=="hibernated" e `conflicted` do prefixo
+// "stream_replaced" — sem gravar, o bloqueio voltaria no próximo boot.
+func (m *Manager) releaseBrakes(rt *instanceRuntime, id string) {
+	rt.mu.Lock()
+	rt.paused = false
+	rt.conflicted = false
+	rt.nextConnectAt = time.Time{}
+	rt.connectFails = 0
+	metaChanged := false
+	if rt.meta.Status == "hibernated" {
+		rt.meta.Status = "connecting"
+		metaChanged = true
+	}
+	if strings.HasPrefix(rt.meta.LastDisconnectReason, "stream_replaced") {
+		rt.meta.LastDisconnectReason = ""
+		metaChanged = true
+	}
+	in := rt.meta
 	rt.mu.Unlock()
+	if metaChanged {
+		if err := m.store.Save(&in); err != nil {
+			m.log.Warnf("instance %s: falha ao persistir a liberação dos freios: %v", id, err)
+		}
+	}
+}
 
-	// Wait briefly for the first code to arrive.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		rt.mu.RLock()
-		c, exp := rt.qrCode, rt.qrExpiresAt
-		currentAttempt, running := rt.qrAttempt, rt.qrRunning
-		rt.mu.RUnlock()
-		if currentAttempt != attempt || !running {
-			return "", time.Time{}, m.statusOf(rt), nil
+// recycleDevice troca por um device virgem. É a única saída para um *Client com
+// Store.Deleted: a lib não tem "undelete" e o Connect falha para sempre.
+func (m *Manager) recycleDevice(rt *instanceRuntime, id, reason string) bool {
+	if m.container == nil {
+		return false
+	}
+	m.attachClient(rt, m.container.NewDevice())
+	m.auditInstance(id, logCategoryConnection, "device_recycled", "warning", InstanceLog{
+		Status: "disconnected", Source: "qr", Reason: reason,
+	})
+	return true
+}
+
+// reviveSession tenta trazer de volta uma sessão salva que só está offline,
+// para não obrigar o profissional a reparear por uma queda passageira.
+func (m *Manager) reviveSession(ctx context.Context, rt *instanceRuntime, cli *whatsmeow.Client, id string) bool {
+	window := m.reviveWindow()
+	if window <= 0 || cli == nil {
+		return false
+	}
+	if !cli.IsConnected() {
+		if err := m.dial(cli); err != nil {
+			m.log.Warnf("instance %s: revive falhou no connect: %v", id, err)
 		}
-		if c != "" {
-			return c, exp, "connecting", nil
-		}
-		time.Sleep(200 * time.Millisecond)
+	}
+	recovered := waitReconnect(ctx, window, 250*time.Millisecond, func() bool {
+		return cli.IsConnected() && cli.IsLoggedIn()
+	})
+	m.auditInstance(id, logCategoryConnection, "qr_revive_attempt", "info", InstanceLog{
+		Status: "connecting", Source: "qr",
+		Details: map[string]any{"recovered": recovered, "windowSeconds": int(window.Seconds())},
+	})
+	return recovered
+}
+
+// discardLink desvincula a sessão que não voltou, liberando um QR novo. Reusa o
+// Logout: unlink remoto best-effort + device novo + flags limpas + persistência.
+func (m *Manager) discardLink(ctx context.Context, id string) {
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := m.Logout(lctx, id); err != nil {
+		m.log.Warnf("instance %s: falha ao descartar o vínculo antes do QR: %v", id, err)
+		return
+	}
+	m.auditInstance(id, logCategoryConnection, "qr_forced_relink", "warning", InstanceLog{
+		Status: "disconnected", Source: "qr",
+		Reason: "sessão salva não voltou na janela de revive; novo QR necessário",
+	})
+}
+
+// startPairing reserva a tentativa (a reserva é a exclusão mútua entre
+// requisições concorrentes), abre o canal de QR e disca — nessa ordem, porque
+// GetQRChannel tem que vir ANTES do Connect (qrchan.go:191-196).
+func (m *Manager) startPairing(rt *instanceRuntime, cli *whatsmeow.Client, id string) error {
+	if cli == nil {
+		return whatsmeow.ErrClientIsNil
 	}
 	rt.mu.Lock()
-	if rt.qrAttempt != attempt || !rt.qrRunning {
+	if rt.qrRunning {
 		rt.mu.Unlock()
-		return "", time.Time{}, m.statusOf(rt), nil
+		return errPairingInFlight
 	}
-	if rt.qrCode != "" {
-		code, expires = rt.qrCode, rt.qrExpiresAt
-		rt.mu.Unlock()
-		return code, expires, "connecting", nil
-	}
-	cancel := rt.qrCancel
-	rt.qrAttempt++ // invalidate the consumer belonging to the stalled channel
-	rt.qrRunning = false
+	rt.qrAttempt++
+	attempt := rt.qrAttempt
+	rt.qrRunning = true
+	rt.qrStartedAt = time.Now()
 	rt.qrCode = ""
 	rt.qrExpiresAt = time.Time{}
-	rt.qrCancel = nil
+	harvest := m.history != nil && m.history.enabledFor(rt.meta)
 	rt.mu.Unlock()
-	if cancel != nil {
-		cancel()
+
+	// Full history sync SÓ para instâncias na lista de colheita — pareamentos
+	// normais (nutricionist_*) não são afetados. DeviceProps é global da lib,
+	// então o valor vale para o pareamento iniciado agora; corrida entre dois
+	// pareamentos simultâneos é aceitável (raro e o efeito é só sync mais lento).
+	store.DeviceProps.RequireFullSync = proto.Bool(harvest)
+	if harvest {
+		m.log.Infof("instance %s: pareamento com RequireFullSync=true (colheita de histórico)", id)
 	}
-	m.auditInstance(id, logCategoryConnection, "pairing_first_qr_timeout", "warning", InstanceLog{
-		Status: "disconnected", Source: "qr", Reason: "first QR event did not arrive within 5 seconds",
+
+	qrCtx, cancel := context.WithCancel(context.Background())
+	qrChan, qerr := m.openQRChannel(qrCtx, cli)
+	if qerr != nil {
+		cancel()
+		m.releasePairing(rt, attempt)
+		return qerr
+	}
+	if cerr := m.dial(cli); cerr != nil && !errors.Is(cerr, whatsmeow.ErrAlreadyConnected) {
+		cancel()
+		m.releasePairing(rt, attempt)
+		return cerr
+	}
+	rt.mu.Lock()
+	if rt.qrAttempt != attempt {
+		rt.mu.Unlock()
+		cancel()
+		return errPairingSuperseded
+	}
+	rt.qrCancel = cancel
+	rt.mu.Unlock()
+	m.auditInstance(id, logCategoryConnection, "pairing_started", "info", InstanceLog{
+		Status: "connecting", Source: "qr",
 	})
-	return "", time.Time{}, "", &apiError{
-		Status: http.StatusGatewayTimeout,
-		Msg:    "timed out waiting for the first QR code; retry the connection",
+	go m.consumeQR(rt, attempt, qrChan)
+	return nil
+}
+
+// releasePairing devolve a reserva quando o pareamento não chegou a começar.
+func (m *Manager) releasePairing(rt *instanceRuntime, attempt uint64) {
+	rt.mu.Lock()
+	if rt.qrAttempt == attempt {
+		rt.qrRunning = false
+		rt.qrStartedAt = time.Time{}
+	}
+	rt.mu.Unlock()
+}
+
+// recoverFromPairErr aplica a cura do erro e diz se vale re-planejar.
+func (m *Manager) recoverFromPairErr(rt *instanceRuntime, cli *whatsmeow.Client, id string, err error) bool {
+	switch {
+	case errors.Is(err, whatsmeow.ErrClientIsNil), errors.Is(err, store.ErrDeviceDeleted):
+		return m.recycleDevice(rt, id, err.Error())
+	case errors.Is(err, whatsmeow.ErrQRAlreadyConnected):
+		if cli != nil {
+			cli.Disconnect()
+		}
+		return true
+	case errors.Is(err, whatsmeow.ErrQRStoreContainsID):
+		// Pareou entre o snapshot e a chamada: re-planejar leva a revive (ou a
+		// "connected", se o login concluiu).
+		return true
+	}
+	return false
+}
+
+type qrAwaitOutcome uint8
+
+const (
+	qrAwaitGot qrAwaitOutcome = iota
+	qrAwaitSuperseded
+	qrAwaitTimedOut
+)
+
+// awaitFirstQR espera o primeiro código da tentativa corrente.
+func (m *Manager) awaitFirstQR(ctx context.Context, rt *instanceRuntime) (string, time.Time, qrAwaitOutcome) {
+	wait := m.firstCodeWait()
+	poll := 200 * time.Millisecond
+	if adaptive := wait / 10; adaptive > 0 && adaptive < poll {
+		poll = adaptive
+	}
+	rt.mu.RLock()
+	attempt := rt.qrAttempt
+	rt.mu.RUnlock()
+
+	deadline := time.Now().Add(wait)
+	for {
+		rt.mu.RLock()
+		code, exp := rt.qrCode, rt.qrExpiresAt
+		current, running := rt.qrAttempt, rt.qrRunning
+		rt.mu.RUnlock()
+		if current != attempt {
+			return "", time.Time{}, qrAwaitSuperseded
+		}
+		if code != "" {
+			return code, exp, qrAwaitGot
+		}
+		if !running {
+			return "", time.Time{}, qrAwaitSuperseded
+		}
+		if !time.Now().Before(deadline) {
+			return "", time.Time{}, qrAwaitTimedOut
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", time.Time{}, qrAwaitTimedOut
+		case <-timer.C:
+		}
+	}
+}
+
+// pairingUnavailable é a única saída de erro do fluxo de QR além do 404: sempre
+// retryable e auditada, nunca 500 cru nem 504.
+func (m *Manager) pairingUnavailable(id string, cause error) error {
+	reason := ""
+	if cause != nil {
+		reason = cause.Error()
+	}
+	m.auditInstance(id, logCategoryConnection, "pairing_unavailable", "error", InstanceLog{
+		Status: "disconnected", Source: "qr", Reason: reason,
+	})
+	return &apiError{
+		Status:     http.StatusServiceUnavailable,
+		RetryAfter: 3,
+		Msg:        "não foi possível gerar o QR agora; tente novamente em instantes",
 	}
 }
 
@@ -684,23 +1011,16 @@ func (m *Manager) Disconnect(id string) error {
 	if rt == nil {
 		return errNotFound
 	}
+	m.invalidateQR(rt)
 	rt.mu.Lock()
-	cancel := rt.qrCancel
-	if rt.qrRunning || rt.qrCode != "" || cancel != nil {
-		rt.qrAttempt++
-	}
-	rt.qrRunning = false
-	rt.qrCode = ""
-	rt.qrExpiresAt = time.Time{}
-	rt.qrCancel = nil
 	rt.meta.Status = "hibernated"
 	rt.paused = true // intentional — the watchdog must leave it down
 	in := rt.meta
+	cli := rt.client
 	rt.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if cli != nil {
+		cli.Disconnect()
 	}
-	rt.client.Disconnect()
 	if err := m.store.Save(&in); err != nil {
 		return err
 	}
@@ -765,10 +1085,6 @@ func (m *Manager) ResetRuntime(id string) (map[string]any, error) {
 		rt.mu.Unlock()
 		return nil, rateLimitError("runtime reset cooldown is active", wait)
 	}
-	if rt.qrCancel != nil {
-		rt.qrCancel()
-		rt.qrCancel = nil
-	}
 	rt.resetting = true
 	rt.paused = false
 	rt.conflicted = false
@@ -784,6 +1100,7 @@ func (m *Manager) ResetRuntime(id string) (map[string]any, error) {
 		rt.mu.Unlock()
 		return nil, err
 	}
+	m.invalidateQR(rt)
 	cli.Disconnect()
 	recovered, qerr := m.store.RecoverInstanceQueue(id)
 	m.stats.resets.Add(1)
@@ -809,14 +1126,11 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return errNotFound
 	}
 	m.auditInstance(id, logCategorySystem, "instance_delete_requested", "warning", InstanceLog{Source: "operator"})
+	m.invalidateQR(rt)
+	rt.mu.RLock()
 	cli := rt.client
+	rt.mu.RUnlock()
 	if cli != nil {
-		rt.mu.Lock()
-		if rt.qrCancel != nil {
-			rt.qrCancel()
-			rt.qrCancel = nil
-		}
-		rt.mu.Unlock()
 		if cli.IsLoggedIn() {
 			_ = cli.Logout(ctx) // logs out of WhatsApp and deletes the device store
 		} else {
