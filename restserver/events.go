@@ -227,18 +227,51 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 	}
 	sentByAPI := m.wasSentByAPI(v.Info.ID)
 	m.recordLive(instanceID, v, sentByAPI)
+	chatPN, chatLID := resolveOwnChat(v.Info)
+	if chatPN == "" && chatLID != "" {
+		// Mensagens digitadas no telefone pareado costumam chegar endereçadas
+		// pelo LID. RecipientAlt normalmente traz o PN, mas o mapa persistido do
+		// whatsmeow é o fallback durável quando esse atributo não vem no evento.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		mapped, err := rt.client.Store.LIDs.GetPNForLID(ctx, v.Info.Chat)
+		cancel()
+		if err == nil && mapped.Server == types.DefaultUserServer {
+			chatPN = mapped.String()
+		} else if err != nil {
+			m.log.Warnf("instance %s: failed to resolve own-message chat %s to PN: %v", instanceID, chatLID, err)
+		}
+	}
 	msg := map[string]any{
 		"messageid":    v.Info.ID,
 		"text":         extractText(v.Message),
 		"fromMe":       true,
 		"wasSentByApi": sentByAPI,
 		"isGroup":      false,
-		"sender_pn":    "",
-		"sender":       "",
+		"sender_pn":    chatPN,
+		"sender":       chatLID,
 		"chatid":       v.Info.Chat.String(),
 		"pushName":     v.Info.PushName,
 	}
 	m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
+}
+
+// resolveOwnChat devolve os dois endereços do DESTINATÁRIO de uma mensagem
+// fromMe. Para ecos enviados por outro aparelho, Sender/SenderAlt representam o
+// próprio dono da sessão; a conversa humana está em Chat/RecipientAlt.
+func resolveOwnChat(info types.MessageInfo) (chatPN string, chatLID string) {
+	for _, jid := range []types.JID{info.Chat, info.RecipientAlt} {
+		switch jid.Server {
+		case types.DefaultUserServer:
+			if chatPN == "" {
+				chatPN = jid.String()
+			}
+		case types.HiddenUserServer:
+			if chatLID == "" {
+				chatLID = jid.String()
+			}
+		}
+	}
+	return chatPN, chatLID
 }
 
 // digitsOnly strips everything but digits (e.g. "5511...@s.whatsapp.net" -> "5511...").

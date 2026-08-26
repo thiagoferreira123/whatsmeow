@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 // O registro de IDs enviados pela API é o que separa "eco do próprio bot"
@@ -47,5 +49,41 @@ func TestSentEchoRegistryPrune(t *testing.T) {
 	}
 	if !m.wasSentByAPI("fresh") {
 		t.Fatal("entrada recém-registrada sobreviveu ao prune")
+	}
+}
+
+func TestResolveOwnChatPhoneAddressed(t *testing.T) {
+	info := types.MessageInfo{MessageSource: types.MessageSource{
+		Chat: types.NewJID("5521970787757", types.DefaultUserServer),
+	}}
+	pn, lid := resolveOwnChat(info)
+	if pn != "5521970787757@s.whatsapp.net" || lid != "" {
+		t.Fatalf("endereçamento por PN incorreto: pn=%q lid=%q", pn, lid)
+	}
+}
+
+func TestResolveOwnChatLIDUsesRecipientAlt(t *testing.T) {
+	info := types.MessageInfo{MessageSource: types.MessageSource{
+		Chat:         types.NewJID("20293754081489", types.HiddenUserServer),
+		RecipientAlt: types.NewJID("5521970787757", types.DefaultUserServer),
+		IsFromMe:     true,
+	}}
+	pn, lid := resolveOwnChat(info)
+	if pn != "5521970787757@s.whatsapp.net" {
+		t.Fatalf("RecipientAlt deveria resolver o telefone, recebeu %q", pn)
+	}
+	if lid != "20293754081489@lid" {
+		t.Fatalf("LID da conversa deveria ser preservado, recebeu %q", lid)
+	}
+}
+
+func TestResolveOwnChatLIDWithoutAltIsExplicitlyUnresolved(t *testing.T) {
+	info := types.MessageInfo{MessageSource: types.MessageSource{
+		Chat:     types.NewJID("20293754081489", types.HiddenUserServer),
+		IsFromMe: true,
+	}}
+	pn, lid := resolveOwnChat(info)
+	if pn != "" || lid != "20293754081489@lid" {
+		t.Fatalf("fallback ao mapa deve receber PN vazio e LID preservado: pn=%q lid=%q", pn, lid)
 	}
 }
