@@ -82,6 +82,9 @@ type Manager struct {
 	sentEchoMu  sync.Mutex
 	sentEchoIDs map[string]time.Time
 
+	// history: colheita opt-in de HistorySync para mineração de base (history.go)
+	history *historyHarvester
+
 	runtimeActive atomic.Bool
 }
 
@@ -121,6 +124,53 @@ func (m *Manager) sendRecorded(ctx context.Context, rt *instanceRuntime, jid typ
 	return rt.client.SendMessage(ctx, jid, msg, whatsmeow.SendRequestExtra{ID: msgID})
 }
 
+// Logout desvincula a sessão do WhatsApp (some de "Aparelhos conectados") e
+// prepara um device NOVO para re-pareamento por QR — preservando a linha da
+// instância (id, token, webhook). Se o unlink remoto falhar (ex.: sessão
+// offline), o device local é descartado mesmo assim; nesse caso o pareamento
+// antigo precisa ser removido manualmente no celular.
+func (m *Manager) Logout(ctx context.Context, id string) (map[string]any, error) {
+	rt := m.get(id)
+	if rt == nil {
+		return nil, errNotFound
+	}
+	rt.mu.Lock()
+	cli := rt.client
+	if cancel := rt.qrCancel; cancel != nil {
+		cancel()
+		rt.qrCancel = nil
+	}
+	rt.qrRunning = false
+	rt.qrCode = ""
+	rt.mu.Unlock()
+
+	remote := true
+	if err := cli.Logout(ctx); err != nil {
+		remote = false
+		m.log.Warnf("instance %s: logout remoto falhou (%v); descartando sessão local mesmo assim", id, err)
+		cli.Disconnect()
+		if cli.Store != nil && cli.Store.ID != nil {
+			if derr := cli.Store.Delete(ctx); derr != nil {
+				m.log.Warnf("instance %s: falha ao apagar device local: %v", id, derr)
+			}
+		}
+	}
+	m.attachClient(rt, m.container.NewDevice())
+	rt.mu.Lock()
+	rt.loggedOut = false // logout intencional para re-parear: QR liberado
+	rt.paused = false
+	rt.conflicted = false
+	rt.meta.Status = "disconnected"
+	rt.meta.JID = ""
+	in := rt.meta
+	rt.mu.Unlock()
+	_ = m.store.Save(&in)
+	m.auditInstance(id, logCategorySystem, "logout_for_repair", "warning", InstanceLog{
+		Status: "disconnected", Source: "api", Details: map[string]any{"remoteLogout": remote},
+	})
+	return map[string]any{"instanceId": id, "loggedOut": true, "remoteLogout": remote}, nil
+}
+
 func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waLog.Logger) *Manager {
 	conc := cfg.ConnectConcurrency
 	if conc <= 0 {
@@ -142,6 +192,7 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 		sendSem:     make(chan struct{}, sendConc),
 		jidCache:    make(map[string]jidCacheEntry),
 		sentEchoIDs: make(map[string]time.Time),
+		history:     newHistoryHarvester(),
 	}
 	m.webhooks.onFailure = func(url string, out deliveryOutcome) {
 		log.Warnf("webhook delivery failed after %d attempts (status=%d err=%v) url=%s",
@@ -511,6 +562,15 @@ func (m *Manager) qrCode(id string) (code string, expires time.Time, status stri
 	var attempt uint64
 	rt.mu.Lock()
 	if !rt.qrRunning {
+		// Full history sync SÓ para instâncias na lista de colheita — pareamentos
+		// normais (nutricionist_*) não são afetados. DeviceProps é global da lib,
+		// então o valor vale para o pareamento iniciado agora; corrida entre dois
+		// pareamentos simultâneos é aceitável (raro e o efeito é só sync mais lento).
+		harvest := m.history != nil && m.history.enabledFor(rt.meta)
+		store.DeviceProps.RequireFullSync = proto.Bool(harvest)
+		if harvest {
+			m.log.Infof("instance %s: pareamento com RequireFullSync=true (colheita de histórico)", id)
+		}
 		qrCtx, cancel := context.WithCancel(context.Background())
 		qrChan, qerr := cli.GetQRChannel(qrCtx)
 		if qerr != nil {

@@ -81,6 +81,9 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("POST /instances/{id}/consents/revoke", h.revokeConsent)
 	mux.HandleFunc("POST /instances/{id}/webhook", h.setWebhook)
 	mux.HandleFunc("POST /instances/{id}/disconnect", h.disconnect)
+	mux.HandleFunc("POST /instances/{id}/logout", h.logout)
+	mux.HandleFunc("GET /history", h.historyList)
+	mux.HandleFunc("GET /history/{file}", h.historyDownload)
 	mux.HandleFunc("POST /instances/{id}/hibernate", h.hibernate)
 	mux.HandleFunc("POST /instances/{id}/resume", h.resume)
 	mux.HandleFunc("POST /instances/{id}/reset", h.resetRuntime)
@@ -462,6 +465,16 @@ func (h *Handlers) disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// logout desvincula a sessão e libera o QR para re-pareamento, preservando a
+// linha da instância (id/token/webhook). Usado no fluxo de colheita de histórico.
+func (h *Handlers) logout(w http.ResponseWriter, r *http.Request) {
+	res, err := h.mgr.Logout(r.Context(), r.PathValue("id"))
+	if handleErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (h *Handlers) hibernate(w http.ResponseWriter, r *http.Request) {

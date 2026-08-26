@@ -75,6 +75,8 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 			m.auditInstance(instanceID, logCategoryConnection, "keepalive_restored", "info", InstanceLog{
 				Status: "connected", Source: "whatsapp_socket",
 			})
+		case *events.HistorySync:
+			m.onHistorySync(instanceID, v)
 		}
 	}
 }
