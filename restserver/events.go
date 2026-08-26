@@ -366,6 +366,12 @@ func (m *Manager) onLoggedOut(instanceID string, v *events.LoggedOut) {
 	rt.meta.LastDisconnectReason = fmt.Sprintf("logged_out (onConnect=%v reason=%v)", v.OnConnect, v.Reason)
 	in := rt.meta
 	rt.mu.Unlock()
+	// No 401 a própria lib apaga o device local (Store.Delete → ID=nil,
+	// Deleted=true) e esse *Client recusa qualquer Connect() com
+	// ErrDeviceDeleted — inclusive o do pareamento. Trocar por um device novo
+	// deixa a instância pronta para um QR; sem isso /instance/connect responde
+	// 500 até o processo reiniciar.
+	m.attachClient(rt, m.container.NewDevice())
 	_ = m.store.Save(&in)
 	m.auditInstance(instanceID, logCategoryConnection, "logged_out", "error", InstanceLog{
 		Status: "disconnected", Source: "whatsapp_event", Reason: in.LastDisconnectReason,
