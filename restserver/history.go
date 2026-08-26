@@ -86,17 +86,80 @@ func historyText(msg *waE2E.Message) string {
 }
 
 type historyRecord struct {
-	Type     string `json:"type"` // "message" | "pushname" | "batch"
-	SyncType string `json:"syncType,omitempty"`
-	Progress uint32 `json:"progress,omitempty"`
-	Chat     string `json:"chat,omitempty"`
-	MsgID    string `json:"msgId,omitempty"`
-	FromMe   bool   `json:"fromMe,omitempty"`
-	Ts       string `json:"ts,omitempty"`
-	PushName string `json:"pushName,omitempty"`
-	Text     string `json:"text,omitempty"`
-	JID      string `json:"jid,omitempty"` // para pushnames
-	Media    string `json:"media,omitempty"`
+	Type      string `json:"type"` // "message" | "pushname" | "batch"
+	SyncType  string `json:"syncType,omitempty"` // lotes do HistorySync ou "LIVE" (tap contínuo)
+	Progress  uint32 `json:"progress,omitempty"`
+	Chat      string `json:"chat,omitempty"`
+	MsgID     string `json:"msgId,omitempty"`
+	FromMe    bool   `json:"fromMe,omitempty"`
+	SentByApi bool   `json:"sentByApi,omitempty"` // fromMe originado por esta API (bot) vs humano
+	Ts        string `json:"ts,omitempty"`
+	PushName  string `json:"pushName,omitempty"`
+	Text      string `json:"text,omitempty"`
+	JID       string `json:"jid,omitempty"` // para pushnames
+	Media     string `json:"media,omitempty"`
+}
+
+// historyMedia marca presença de mídia sem texto (áudio/imagem sem legenda etc.).
+func historyMedia(msg *waE2E.Message) string {
+	switch {
+	case msg.GetAudioMessage() != nil:
+		return "audio"
+	case msg.GetImageMessage() != nil:
+		return "image"
+	case msg.GetVideoMessage() != nil:
+		return "video"
+	case msg.GetDocumentMessage() != nil:
+		return "document"
+	case msg.GetStickerMessage() != nil:
+		return "sticker"
+	}
+	return ""
+}
+
+// recordLive grava uma mensagem viva (1:1, pós-dedupe) no JSONL da instância —
+// alimenta a mineração diária da base de conhecimento. Mesmo arquivo e formato
+// da colheita de HistorySync, com syncType "LIVE"; sentByApi permite ao
+// minerador excluir as respostas do próprio bot (anti-circularidade).
+func (m *Manager) recordLive(instanceID string, v *events.Message, sentByAPI bool) {
+	if m.history == nil {
+		return
+	}
+	rt := m.get(instanceID)
+	if rt == nil {
+		return
+	}
+	in := rt.metaCopy()
+	if !m.history.enabledFor(in) {
+		return
+	}
+	text := historyText(v.Message)
+	media := ""
+	if text == "" {
+		if media = historyMedia(v.Message); media == "" {
+			return // sem texto e sem mídia relevante — ruído de protocolo
+		}
+	}
+	h := m.history
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := os.MkdirAll(h.dir, 0o755); err != nil {
+		m.log.Warnf("history live: mkdir %s: %v", h.dir, err)
+		return
+	}
+	path := filepath.Join(h.dir, sanitizeHistoryName(in.Name)+".jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		m.log.Warnf("history live: open %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+	_ = json.NewEncoder(f).Encode(historyRecord{
+		Type: "message", SyncType: "LIVE", Chat: v.Info.Chat.String(),
+		MsgID: v.Info.ID, FromMe: v.Info.IsFromMe, SentByApi: sentByAPI,
+		Ts:       v.Info.Timestamp.UTC().Format(time.RFC3339),
+		PushName: v.Info.PushName, Text: text, Media: media,
+	})
 }
 
 // onHistorySync grava um lote de histórico da instância (se habilitada).

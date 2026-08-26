@@ -97,6 +97,7 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 	if !m.webhooks.dedup(v.Info.ID) {
 		return
 	}
+	m.recordLive(instanceID, v, false)
 	// Any inbound direct message opens the configured service window. Explicit
 	// stop words persist a suppression that wins over that window and over the
 	// SEND_REQUIRE_LOCAL_CONSENT setting.
@@ -194,11 +195,13 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 	if !m.webhooks.dedup("own:" + v.Info.ID) {
 		return
 	}
+	sentByAPI := m.wasSentByAPI(v.Info.ID)
+	m.recordLive(instanceID, v, sentByAPI)
 	msg := map[string]any{
 		"messageid":    v.Info.ID,
 		"text":         extractText(v.Message),
 		"fromMe":       true,
-		"wasSentByApi": m.wasSentByAPI(v.Info.ID),
+		"wasSentByApi": sentByAPI,
 		"isGroup":      false,
 		"sender_pn":    "",
 		"sender":       "",
