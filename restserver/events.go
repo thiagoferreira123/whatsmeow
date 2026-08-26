@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strings"
@@ -98,6 +99,26 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 		return
 	}
 	m.recordLive(instanceID, v, false)
+
+	// Áudio do cliente: baixa e descriptografa na hora e entrega em base64 no
+	// webhook por instância, para o n8n transcrever (gpt-4o-transcribe). Voice
+	// notes são pequenas; cap defensivo para não estourar o corpo do webhook.
+	var audioB64, audioMime string
+	if am := v.Message.GetAudioMessage(); am != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		data, err := rt.client.Download(ctx, am)
+		cancel()
+		const maxAudioBytes = 6 << 20
+		switch {
+		case err != nil:
+			m.log.Warnf("instance %s: download de audio %s falhou: %v", instanceID, v.Info.ID, err)
+		case len(data) > maxAudioBytes:
+			m.log.Warnf("instance %s: audio %s grande demais (%d bytes), nao anexado", instanceID, v.Info.ID, len(data))
+		default:
+			audioB64 = base64.StdEncoding.EncodeToString(data)
+			audioMime = am.GetMimetype()
+		}
+	}
 	// Any inbound direct message opens the configured service window. Explicit
 	// stop words persist a suppression that wins over that window and over the
 	// SEND_REQUIRE_LOCAL_CONSENT setting.
@@ -166,6 +187,8 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 			"sender":       senderLID,
 			"chatid":       v.Info.Chat.String(),
 			"pushName":     v.Info.PushName,
+			"audioBase64":  audioB64,
+			"audioMime":    audioMime,
 		}
 		m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
 	}
