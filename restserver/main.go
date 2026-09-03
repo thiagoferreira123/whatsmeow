@@ -16,6 +16,8 @@ import (
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO), driver name "sqlite"
 
+	"go.mau.fi/whatsmeow"
+	whatstore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
@@ -27,6 +29,13 @@ func main() {
 
 	dbLog := waLog.Stdout("DB", "INFO", true)
 	waClientLog := waLog.Stdout("WA", "INFO", true)
+
+	// Antes de qualquer pareamento: anunciar versão velha faz o telefone recusar
+	// o QR com "não é possível conectar novos dispositivos no momento".
+	waVer := syncWAVersion(ctx, func(ctx context.Context) (*whatstore.WAVersionContainer, error) {
+		return whatsmeow.GetLatestVersion(ctx, nil)
+	}, waClientLog)
+	log.Printf("anunciando WhatsApp Web %s no handshake", waVer.String())
 
 	// One SQLite file/connection pool shared by whatsmeow's device store and our
 	// instances table. Driver name is "sqlite" (modernc); dbutil dialect is "sqlite3".
