@@ -82,15 +82,19 @@ func planQRRequest(s qrSnapshot) qrAction {
 	if s.hasSession {
 		return qrReviveSession
 	}
-	// GetQRChannel devolve ErrQRAlreadyConnected com o socket de pé.
-	if s.connected {
-		return qrDropSocket
-	}
+	// Durante o pareamento, o socket fica conectado antes do login. O polling
+	// do painel deve reutilizar esse canal e seu QR; derrubar o socket aqui
+	// invalida o código que o usuário ainda está tentando escanear.
 	if s.qrRunning && !s.hasCode && s.stallAfter > 0 && s.qrAge >= s.stallAfter {
 		return qrRestartPairing
 	}
 	if s.qrRunning {
 		return qrServeCurrent
+	}
+	// Sem pareamento em andamento, o socket precisa cair antes de abrir um
+	// novo canal: GetQRChannel devolve ErrQRAlreadyConnected com ele de pé.
+	if s.connected {
+		return qrDropSocket
 	}
 	return qrStartPairing
 }

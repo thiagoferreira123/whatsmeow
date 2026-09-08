@@ -58,6 +58,21 @@ func TestPlanQRRequestOnlyBlocksWhenConnectedAndLoggedIn(t *testing.T) {
 			want: qrDropSocket,
 		},
 		{
+			name: "polling preserva socket que aguarda leitura do QR",
+			snap: qrSnapshot{connected: true, qrRunning: true, hasCode: true, qrAge: 2500 * time.Millisecond, stallAfter: testStall},
+			want: qrServeCurrent,
+		},
+		{
+			name: "polling preserva socket enquanto chega o primeiro QR",
+			snap: qrSnapshot{connected: true, qrRunning: true, qrAge: time.Second, stallAfter: testStall},
+			want: qrServeCurrent,
+		},
+		{
+			name: "socket aberto não impede recuperação de pareamento travado",
+			snap: qrSnapshot{connected: true, qrRunning: true, qrAge: time.Minute, stallAfter: testStall},
+			want: qrRestartPairing,
+		},
+		{
 			name: "loop de pareamento travado sem código reinicia",
 			snap: qrSnapshot{qrRunning: true, qrAge: 30 * time.Second, stallAfter: testStall},
 			want: qrRestartPairing,

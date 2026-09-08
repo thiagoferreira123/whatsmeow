@@ -194,6 +194,11 @@ está conectada **e** logada. Todo o resto se cura na própria requisição (`ma
 virgem, socket zumbi é derrubado antes do `GetQRChannel` (que exige `!IsConnected()`), e loop de
 pareamento travado é descartado em vez de virar 504 eterno.
 
+Durante o pareamento, o socket já está conectado, mas ainda não autenticado.
+As consultas periódicas do painel reutilizam o canal e o QR em andamento;
+só um socket sem pareamento ativo é fechado antes de abrir outro canal.
+Isso evita invalidar o código visível a cada atualização de status do painel.
+
 Sessão ainda salva porém offline é tratada à parte: o servidor tenta reconectar por
 `QR_REVIVE_SECONDS`; se voltar responde `connected`, se não voltar **descarta o vínculo**
 (`Logout` → unlink remoto best-effort + device novo) e devolve QR na mesma resposta. Fica
