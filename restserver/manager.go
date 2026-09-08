@@ -162,7 +162,11 @@ func (m *Manager) wasSentByAPI(id string) bool {
 func (m *Manager) sendRecorded(ctx context.Context, rt *instanceRuntime, jid types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
 	msgID := rt.client.GenerateMessageID()
 	m.recordSentEchoID(msgID)
-	return rt.client.SendMessage(ctx, jid, msg, whatsmeow.SendRequestExtra{ID: msgID})
+	response, err := rt.client.SendMessage(ctx, jid, msg, whatsmeow.SendRequestExtra{ID: msgID})
+	if err == nil && msg.GetConversation() != "" {
+		m.rememberPanelText(rt.metaCopy(), jid, response.ID, msg.GetConversation(), response.Timestamp)
+	}
+	return response, err
 }
 
 // clientLogout tenta o unlink remoto tolerando runtime sem client/store — a

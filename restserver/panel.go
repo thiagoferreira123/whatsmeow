@@ -29,7 +29,7 @@ const panelSchema = `CREATE TABLE IF NOT EXISTS panel_media (
  instance_id TEXT NOT NULL,msg_id TEXT NOT NULL,body BLOB NOT NULL,created_at INTEGER NOT NULL,
  PRIMARY KEY(instance_id,msg_id));
  CREATE INDEX IF NOT EXISTS panel_media_age ON panel_media(created_at);
- CREATE TABLE IF NOT EXISTS panel_resync (instance_id TEXT PRIMARY KEY,requested_at INTEGER NOT NULL);`
+ CREATE TABLE IF NOT EXISTS panel_resync (instance_id TEXT PRIMARY KEY,requested_at INTEGER NOT NULL);` + panelEditSchema
 const panelMaxMedia = 32 << 20
 
 func (h *Handlers) panelInstance(w http.ResponseWriter, r *http.Request) (Instance, bool) {
@@ -161,6 +161,8 @@ func (h *Handlers) uzPanelHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = h.mgr.store.db.Exec(`DELETE FROM panel_media WHERE created_at<?`, time.Now().Add(-90*24*time.Hour).Unix())
 	_, _ = h.mgr.store.db.Exec(`DELETE FROM panel_resync WHERE requested_at<?`, time.Now().Add(-48*time.Hour).Unix())
+	_, _ = h.mgr.store.db.Exec(`DELETE FROM panel_sent_text WHERE sent_at<?`, time.Now().Add(-24*time.Hour).UnixMilli())
+	_, _ = h.mgr.store.db.Exec(`DELETE FROM panel_edit_requests WHERE created_at<?`, time.Now().Add(-24*time.Hour).UnixMilli())
 	offset, err := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	if err != nil || offset < 0 {
 		writeErr(w, 400, "invalid cursor")

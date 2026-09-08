@@ -97,6 +97,9 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 	if v.Info.IsGroup {
 		return
 	}
+	if m.panelMessageEdit(instanceID, v) {
+		return
+	}
 	if v.Info.IsFromMe {
 		m.onOwnMessage(instanceID, v)
 		return
