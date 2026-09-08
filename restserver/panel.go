@@ -422,3 +422,44 @@ func (h *Handlers) uzPanelBackfill(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 202, map[string]any{"requested": true})
 }
+
+// Initial historical read-state/media recovery, at most once a day. This asks
+// the account's primary phone for its retained history without resetting pairing.
+func (h *Handlers) uzPanelBootstrap(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.panelInstance(w, r)
+	if !ok {
+		return
+	}
+	rt, err := h.mgr.requireLoggedIn(in.ID)
+	if err != nil {
+		writeErr(w, 503, "instance unavailable")
+		return
+	}
+	result, err := h.mgr.store.db.Exec(`INSERT INTO panel_resync(instance_id,requested_at) VALUES(?,?) ON CONFLICT(instance_id) DO UPDATE SET requested_at=excluded.requested_at WHERE requested_at<?`, in.ID+":bootstrap", time.Now().Unix(), time.Now().Add(-24*time.Hour).Unix())
+	if err != nil {
+		writeErr(w, 503, "history unavailable")
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		writeJSON(w, 202, map[string]any{"requested": false})
+		return
+	}
+	msg := &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type: waE2E.ProtocolMessage_PEER_DATA_OPERATION_REQUEST_MESSAGE.Enum(),
+		PeerDataOperationRequestMessage: &waE2E.PeerDataOperationRequestMessage{
+			PeerDataOperationRequestType: waE2E.PeerDataOperationRequestType_FULL_HISTORY_SYNC_ON_DEMAND.Enum(),
+			FullHistorySyncOnDemandRequest: &waE2E.PeerDataOperationRequestMessage_FullHistorySyncOnDemandRequest{
+				RequestMetadata:               &waE2E.FullHistorySyncOnDemandRequestMetadata{RequestID: proto.String(rt.client.GenerateMessageID())},
+				FullHistorySyncOnDemandConfig: &waE2E.FullHistorySyncOnDemandConfig{HistoryDurationDays: proto.Uint32(90), HistoryFromTimestamp: proto.Uint64(uint64(time.Now().Add(-90 * 24 * time.Hour).Unix()))},
+			},
+		},
+	}}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	if _, err = rt.client.SendPeerMessage(ctx, msg); err != nil {
+		writeErr(w, 503, "phone history request failed")
+		return
+	}
+	writeJSON(w, 202, map[string]any{"requested": true})
+}
