@@ -53,6 +53,12 @@ func uazapiWebhookConfigFromInstance(in Instance) uazapiWebhookConfig {
 }
 
 func (h *Handlers) registerUazapiCompat(mux *http.ServeMux) {
+	mux.HandleFunc("GET /instance/panel/history", h.uzPanelHistory)
+	mux.HandleFunc("GET /instance/panel/media/{id}", h.uzPanelMedia)
+	mux.HandleFunc("GET /instance/panel/avatar", h.uzPanelAvatar)
+	mux.HandleFunc("POST /instance/panel/read", h.uzPanelRead)
+	mux.HandleFunc("POST /instance/panel/resync", h.uzPanelResync)
+	mux.HandleFunc("POST /instance/panel/backfill", h.uzPanelBackfill)
 	mux.HandleFunc("POST /instance/init", h.uzInit)
 	mux.HandleFunc("POST /instance/connect", h.uzConnect)
 	mux.HandleFunc("GET /instance/status", h.uzStatus)

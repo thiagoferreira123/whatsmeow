@@ -54,6 +54,10 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 		switch v := evt.(type) {
 		case *events.Message:
 			m.onMessage(instanceID, v)
+		case *events.MarkChatAsRead:
+			m.panelRead(instanceID, v)
+		case *events.Receipt:
+			m.panelRead(instanceID, v)
 		case *events.Connected:
 			m.onConnected(instanceID)
 		case *events.PairSuccess:
@@ -198,6 +202,12 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 			"audioBase64":  audioB64,
 			"audioMime":    audioMime,
 		}
+		if in.Name == "agendamento_bot" {
+			msg["media"] = historyMedia(v.Message)
+			msg["text"] = historyText(v.Message)
+			media, _, size := panelMedia(v.Message)
+			msg["mediaAvailable"] = media != nil && size <= panelMaxMedia
+		}
 		m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
 	}
 }
@@ -257,6 +267,10 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 	// Own voice notes on the support instance also need transcription during
 	// authorized self tests. API echoes are still filtered by the receiver.
 	if in.Name == "agendamento_bot" {
+		msg["media"] = historyMedia(v.Message)
+		msg["text"] = historyText(v.Message)
+		media, _, size := panelMedia(v.Message)
+		msg["mediaAvailable"] = media != nil && size <= panelMaxMedia
 		if am := v.Message.GetAudioMessage(); am != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			data, err := rt.client.Download(ctx, am)

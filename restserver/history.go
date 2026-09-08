@@ -86,22 +86,30 @@ func historyText(msg *waE2E.Message) string {
 }
 
 type historyRecord struct {
-	Type      string `json:"type"` // "message" | "pushname" | "batch"
-	SyncType  string `json:"syncType,omitempty"` // lotes do HistorySync ou "LIVE" (tap contínuo)
-	Progress  uint32 `json:"progress,omitempty"`
-	Chat      string `json:"chat,omitempty"`
-	MsgID     string `json:"msgId,omitempty"`
-	FromMe    bool   `json:"fromMe,omitempty"`
-	SentByApi bool   `json:"sentByApi,omitempty"` // fromMe originado por esta API (bot) vs humano
-	Ts        string `json:"ts,omitempty"`
-	PushName  string `json:"pushName,omitempty"`
-	Text      string `json:"text,omitempty"`
-	JID       string `json:"jid,omitempty"` // para pushnames
-	Media     string `json:"media,omitempty"`
+	Type           string   `json:"type"`               // "message" | "pushname" | "batch"
+	SyncType       string   `json:"syncType,omitempty"` // lotes do HistorySync ou "LIVE" (tap contínuo)
+	Progress       uint32   `json:"progress,omitempty"`
+	Chat           string   `json:"chat,omitempty"`
+	MsgID          string   `json:"msgId,omitempty"`
+	FromMe         bool     `json:"fromMe,omitempty"`
+	SentByApi      bool     `json:"sentByApi,omitempty"` // fromMe originado por esta API (bot) vs humano
+	Ts             string   `json:"ts,omitempty"`
+	PushName       string   `json:"pushName,omitempty"`
+	Text           string   `json:"text,omitempty"`
+	JID            string   `json:"jid,omitempty"` // para pushnames
+	Media          string   `json:"media,omitempty"`
+	MediaAvailable bool     `json:"mediaAvailable,omitempty"`
+	Snapshot       bool     `json:"snapshot,omitempty"`
+	Read           *bool    `json:"read,omitempty"`
+	ReadThrough    string   `json:"readThrough,omitempty"`
+	MessageIDs     []string `json:"messageIds,omitempty"`
 }
 
 // historyMedia marca presença de mídia sem texto (áudio/imagem sem legenda etc.).
 func historyMedia(msg *waE2E.Message) string {
+	if inner := msg.GetEphemeralMessage().GetMessage(); inner != nil {
+		return historyMedia(inner)
+	}
 	switch {
 	case msg.GetAudioMessage() != nil:
 		return "audio"
@@ -135,6 +143,10 @@ func (m *Manager) recordLive(instanceID string, v *events.Message, sentByAPI boo
 	}
 	text := historyText(v.Message)
 	media := ""
+	available := m.savePanelMedia(in, v.Info.ID, v.Message, v.Info.Timestamp)
+	if in.Name == "agendamento_bot" {
+		media = historyMedia(v.Message)
+	}
 	if text == "" {
 		if media = historyMedia(v.Message); media == "" {
 			return // sem texto e sem mídia relevante — ruído de protocolo
@@ -158,7 +170,7 @@ func (m *Manager) recordLive(instanceID string, v *events.Message, sentByAPI boo
 		Type: "message", SyncType: "LIVE", Chat: v.Info.Chat.String(),
 		MsgID: v.Info.ID, FromMe: v.Info.IsFromMe, SentByApi: sentByAPI,
 		Ts:       v.Info.Timestamp.UTC().Format(time.RFC3339),
-		PushName: v.Info.PushName, Text: text, Media: media,
+		PushName: v.Info.PushName, Text: text, Media: media, MediaAvailable: available,
 	})
 }
 
@@ -195,6 +207,10 @@ func (m *Manager) onHistorySync(instanceID string, v *events.HistorySync) {
 	for _, conv := range data.GetConversations() {
 		convs++
 		chat := conv.GetID()
+		if in.Name == "agendamento_bot" && (conv.UnreadCount != nil || conv.MarkedAsUnread != nil) {
+			read := conv.GetUnreadCount() == 0 && !conv.GetMarkedAsUnread()
+			_ = enc.Encode(historyRecord{Type: "read", Snapshot: true, Chat: chat, Read: &read, ReadThrough: time.Unix(int64(conv.GetConversationTimestamp()), 0).UTC().Format(time.RFC3339Nano), Ts: time.Now().UTC().Format(time.RFC3339Nano)})
+		}
 		for _, hm := range conv.GetMessages() {
 			wm := hm.GetMessage()
 			if wm == nil {
@@ -202,6 +218,10 @@ func (m *Manager) onHistorySync(instanceID string, v *events.HistorySync) {
 			}
 			text := historyText(wm.GetMessage())
 			media := ""
+			available := m.savePanelMedia(in, wm.GetKey().GetID(), wm.GetMessage(), time.Unix(int64(wm.GetMessageTimestamp()), 0))
+			if in.Name == "agendamento_bot" {
+				media = historyMedia(wm.GetMessage())
+			}
 			if text == "" {
 				// marca presença de mídia sem texto para o minerador saber que
 				// houve algo ali (áudio/imagem sem legenda etc.)
@@ -223,12 +243,13 @@ func (m *Manager) onHistorySync(instanceID string, v *events.HistorySync) {
 			}
 			_ = enc.Encode(historyRecord{
 				Type: "message", SyncType: syncType, Chat: chat,
-				MsgID:  wm.GetKey().GetID(),
-				FromMe: wm.GetKey().GetFromMe(),
-				Ts:     time.Unix(int64(wm.GetMessageTimestamp()), 0).UTC().Format(time.RFC3339),
-				PushName: wm.GetPushName(),
-				Text:     text,
-				Media:    media,
+				MsgID:          wm.GetKey().GetID(),
+				FromMe:         wm.GetKey().GetFromMe(),
+				Ts:             time.Unix(int64(wm.GetMessageTimestamp()), 0).UTC().Format(time.RFC3339),
+				PushName:       wm.GetPushName(),
+				Text:           text,
+				Media:          media,
+				MediaAvailable: available,
 			})
 			msgs++
 		}

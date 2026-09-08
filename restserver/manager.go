@@ -317,6 +317,7 @@ func (m *Manager) invalidateQR(rt *instanceRuntime) {
 // chegaria.
 func (m *Manager) attachClient(rt *instanceRuntime, device *store.Device) {
 	cli := whatsmeow.NewClient(device, m.log)
+	cli.EmitAppStateEventsOnFullSync = rt.metaCopy().Name == "agendamento_bot"
 	cli.EnableAutoReconnect = true // recover from socket drops without a new QR (default true)
 	// Só faz sentido para device pareado: com Store.ID nil o autoReconnect da lib
 	// é no-op (client.go:606-609), então a flag apenas engoliria o erro de dial do

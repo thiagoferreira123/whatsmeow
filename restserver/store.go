@@ -151,6 +151,9 @@ type Store struct {
 }
 
 func NewStore(db *sql.DB) (*Store, error) {
+	if _, err := db.Exec(panelSchema); err != nil {
+		return nil, err
+	}
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return nil, err
 	}
