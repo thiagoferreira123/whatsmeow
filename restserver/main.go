@@ -110,6 +110,7 @@ func main() {
 		return
 	}
 	mgr.StartQueueWorkers()
+	mgr.StartAgentWebhooks(ctx)
 	mgr.StartLogCleanup()
 	mgr.StartWatchdog(time.Duration(cfg.WatchdogSeconds) * time.Second)
 	mgr.SetRuntimeActive(true)

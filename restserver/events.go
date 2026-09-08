@@ -151,7 +151,7 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 
 	// Built-in 1/2 appointment-confirmation auto-reply. Sent in the background
 	// so a slow send never blocks this instance's event-handler queue.
-	if m.cfg.AutoReplyEnabled && intent != "" {
+	if m.cfg.AutoReplyEnabled && intent != "" && rt.metaCopy().Name != "agendamento_bot" {
 		reply := m.cfg.AutoReplyConfirm
 		if intent == "2" {
 			reply = m.cfg.AutoReplyCancel
@@ -186,6 +186,7 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 		senderPN = m.canonicalWebhookSenderPN(instanceID, v.Info)
 		msg := map[string]any{
 			"messageid":    v.Info.ID,
+			"timestamp":    v.Info.Timestamp.UTC().Format(time.RFC3339Nano),
 			"text":         text,
 			"fromMe":       v.Info.IsFromMe,
 			"wasSentByApi": false,
@@ -243,6 +244,7 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 	}
 	msg := map[string]any{
 		"messageid":    v.Info.ID,
+		"timestamp":    v.Info.Timestamp.UTC().Format(time.RFC3339Nano),
 		"text":         extractText(v.Message),
 		"fromMe":       true,
 		"wasSentByApi": sentByAPI,
@@ -251,6 +253,19 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 		"sender":       chatLID,
 		"chatid":       v.Info.Chat.String(),
 		"pushName":     v.Info.PushName,
+	}
+	// Own voice notes on the support instance also need transcription during
+	// authorized self tests. API echoes are still filtered by the receiver.
+	if in.Name == "agendamento_bot" {
+		if am := v.Message.GetAudioMessage(); am != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			data, err := rt.client.Download(ctx, am)
+			cancel()
+			if err == nil && len(data) <= 6<<20 {
+				msg["audioBase64"] = base64.StdEncoding.EncodeToString(data)
+				msg["audioMime"] = am.GetMimetype()
+			}
+		}
 	}
 	m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
 }

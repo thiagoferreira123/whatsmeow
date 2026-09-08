@@ -229,13 +229,13 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 		sendConc = 8
 	}
 	m := &Manager{
-		runtimes:   make(map[string]*instanceRuntime),
-		container:  container,
-		store:      store,
-		cfg:        cfg,
-		webhooks:   NewWebhookSender(),
-		outbound:   newOutboundGuard(cfg),
-		log:        log,
+		runtimes:    make(map[string]*instanceRuntime),
+		container:   container,
+		store:       store,
+		cfg:         cfg,
+		webhooks:    NewWebhookSender(),
+		outbound:    newOutboundGuard(cfg),
+		log:         log,
 		connectSem:  make(chan struct{}, conc),
 		sendSem:     make(chan struct{}, sendConc),
 		jidCache:    make(map[string]jidCacheEntry),
@@ -247,6 +247,7 @@ func NewManager(container *sqlstore.Container, store *Store, cfg Config, log waL
 			out.Attempts, out.StatusCode, out.Err, url)
 	}
 	m.loadGlobalWebhook()
+	m.webhooks.agentEnqueue = m.enqueueAgentWebhook
 	m.runtimeActive.Store(true)
 	return m
 }

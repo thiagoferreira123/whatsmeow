@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,7 +27,8 @@ type WebhookSender struct {
 	retryBackoff func(attempt int) time.Duration
 	// onFailure é chamado quando uma entrega assíncrona esgota as tentativas sem
 	// sucesso — uma entrega perdida precisa deixar rastro (log), nunca sumir.
-	onFailure func(url string, out deliveryOutcome)
+	onFailure    func(url string, out deliveryOutcome)
+	agentEnqueue func(url string, payload any) bool
 }
 
 // webhookMaxAttempts limita as tentativas de entrega por evento.
@@ -57,6 +61,20 @@ func (ws *WebhookSender) deliverSync(url, secret string, body []byte) deliveryOu
 		req.Header.Set("Content-Type", "application/json")
 		if secret != "" {
 			req.Header.Set("x-uazapi-secret", secret)
+			ts := strconv.FormatInt(time.Now().Unix(), 10)
+			nonceBytes := make([]byte, 16)
+			if _, err := rand.Read(nonceBytes); err != nil {
+				out.Err = err
+				return out
+			}
+			nonce := hex.EncodeToString(nonceBytes)
+			digest := sha256.Sum256(body)
+			canonical := strings.Join([]string{"POST", req.URL.Path, ts, nonce, hex.EncodeToString(digest[:])}, "\n")
+			mac := hmac.New(sha256.New, []byte(secret))
+			mac.Write([]byte(canonical))
+			req.Header.Set("x-agents-timestamp", ts)
+			req.Header.Set("x-agents-nonce", nonce)
+			req.Header.Set("x-agents-signature", hex.EncodeToString(mac.Sum(nil)))
 		}
 		resp, err := ws.client.Do(req)
 		if err != nil {
@@ -121,6 +139,9 @@ func (ws *WebhookSender) dedup(id string) bool {
 // tentativas). Falha definitiva é reportada via onFailure — nunca engolida.
 func (ws *WebhookSender) deliver(url, secret string, payload any) {
 	if url == "" {
+		return
+	}
+	if ws.agentEnqueue != nil && ws.agentEnqueue(url, payload) {
 		return
 	}
 	body, err := json.Marshal(payload)

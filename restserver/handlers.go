@@ -46,13 +46,14 @@ func (h *Handlers) Router() http.Handler {
 			status = http.StatusServiceUnavailable
 		}
 		writeJSON(w, status, map[string]any{
-			"ok":              active,
-			"service":         "whatsmeow-restserver",
-			"version":         serviceVersion,
-			"outboundSafety":  true,
-			"persistentQueue": true,
-			"runtimeRecovery": true,
-			"runtimeOwner":    h.mgr.RuntimeActive(),
+			"ok":                   active,
+			"service":              "whatsmeow-restserver",
+			"version":              serviceVersion,
+			"outboundSafety":       true,
+			"persistentQueue":      true,
+			"agentsSignedWebhooks": true,
+			"runtimeRecovery":      true,
+			"runtimeOwner":         h.mgr.RuntimeActive(),
 		})
 	})
 	mux.HandleFunc("GET /live", func(w http.ResponseWriter, r *http.Request) {
