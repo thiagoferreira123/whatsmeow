@@ -219,6 +219,10 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 // telefone pareado OU enviadas por esta API) ao webhook POR INSTÂNCIA, para que
 // bots detectem conversa humana ativa e silenciem (human_lock no n8n).
 // wasSentByApi distingue eco do próprio bot (via sentEchoIDs) de resposta humana.
+// humanTyped restringe "resposta humana" ao telefone pareado (device 0): envios
+// automatizados por OUTRO dispositivo companheiro do mesmo número (uazapi —
+// campanhas Valentina/cobrança do DietSystem) chegam aqui com wasSentByApi=false
+// e não podem ativar human_lock (incidente de 2026-09-09: SDR mudo por 12h).
 // Instâncias sem webhook configurado seguem exatamente como antes (nenhuma
 // entrega); o webhook global (Cloud API) não recebe ecos. Grupos nunca chegam
 // aqui (filtrados no onMessage).
@@ -240,6 +244,7 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 		return
 	}
 	sentByAPI := m.wasSentByAPI(v.Info.ID)
+	humanTyped := echoHumanTyped(sentByAPI, v.Info.Sender.Device)
 	m.recordLive(instanceID, v, sentByAPI)
 	chatPN, chatLID := resolveOwnChat(v.Info)
 	if chatPN == "" && chatLID != "" {
@@ -261,6 +266,8 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 		"text":         extractText(v.Message),
 		"fromMe":       true,
 		"wasSentByApi": sentByAPI,
+		"humanTyped":   humanTyped,
+		"senderDevice": v.Info.Sender.Device,
 		"isGroup":      false,
 		"sender_pn":    chatPN,
 		"sender":       chatLID,
@@ -285,6 +292,14 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 		}
 	}
 	m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
+}
+
+// echoHumanTyped: um eco fromMe só conta como digitado pelo humano quando veio
+// do TELEFONE pareado (device 0) e não é envio registrado desta API. Qualquer
+// dispositivo companheiro (uazapi, WhatsApp Web, esta API) tem device > 0 e é
+// tratado como automatizado — falso "humano" silencia o bot em massa.
+func echoHumanTyped(sentByAPI bool, senderDevice uint16) bool {
+	return !sentByAPI && senderDevice == 0
 }
 
 // resolveOwnChat devolve os dois endereços do DESTINATÁRIO de uma mensagem

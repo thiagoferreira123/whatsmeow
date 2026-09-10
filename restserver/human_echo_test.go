@@ -52,6 +52,22 @@ func TestSentEchoRegistryPrune(t *testing.T) {
 	}
 }
 
+// echoHumanTyped: só o TELEFONE pareado (device 0) conta como resposta humana.
+// Ecos de dispositivos companheiros (uazapi, WhatsApp Web, esta API) são envios
+// automatizados — campanhas do DietSystem enviadas pelo uazapi no mesmo número
+// silenciavam o bot SDR por 12h (incidente de 2026-09-09).
+func TestEchoHumanTyped(t *testing.T) {
+	if !echoHumanTyped(false, 0) {
+		t.Fatal("eco digitado no telefone (device 0) deve contar como humano")
+	}
+	if echoHumanTyped(true, 0) {
+		t.Fatal("eco de envio desta API nunca é humano, mesmo com device 0")
+	}
+	if echoHumanTyped(false, 7) {
+		t.Fatal("eco de dispositivo companheiro (uazapi/Web) não pode contar como humano")
+	}
+}
+
 func TestResolveOwnChatPhoneAddressed(t *testing.T) {
 	info := types.MessageInfo{MessageSource: types.MessageSource{
 		Chat: types.NewJID("5521970787757", types.DefaultUserServer),
