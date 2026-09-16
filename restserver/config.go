@@ -8,7 +8,13 @@ import (
 
 // Config holds all runtime configuration, loaded from environment variables.
 type Config struct {
-	Port                      string
+	Port string
+	// LogLevel do logger da lib whatsmeow. Fica INFO por padrão, mas notificação
+	// desconhecida do WhatsApp sai em DEBUG — foi assim que a quebra de
+	// pareamento de 15/09 (companion_reg_refresh) passou dois dias sem deixar
+	// rastro. Poder subir para DEBUG por env evita precisar de build novo para
+	// enxergar a próxima virada de protocolo.
+	LogLevel                  string
 	DSN                       string
 	AdminAPIKey               string // if empty, auth is disabled (local convenience)
 	WebhookSecret             string // default app-secret for the global webhook (HMAC) / legacy x-uazapi-secret
@@ -49,7 +55,8 @@ type Config struct {
 
 func loadConfig() Config {
 	return Config{
-		Port: getenv("PORT", "8080"),
+		Port:     getenv("PORT", "8080"),
+		LogLevel: strings.ToUpper(strings.TrimSpace(getenv("WA_LOG_LEVEL", "INFO"))),
 		// WAL + synchronous(NORMAL) for write throughput with many instances;
 		// busy_timeout(30000) rides out write bursts (pairing/history-sync storms);
 		// _txlock=immediate takes the write lock at BEGIN so concurrent write

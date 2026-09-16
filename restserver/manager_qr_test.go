@@ -95,6 +95,51 @@ func TestConsumeQRKeepsCodeOnPasskeyEvents(t *testing.T) {
 	}
 }
 
+// O evento terminal do canal de QR era descartado em silêncio: a auditoria
+// mostrava pairing_started + N qr_generated e parava, sem dizer POR QUE o
+// pareamento não fechou. Foi exatamente isso que escondeu a quebra de 15/09
+// (companion_reg_refresh) por dois dias.
+func TestConsumeQRAuditsTerminalEvent(t *testing.T) {
+	manager := testUazapiCompatManager(t, qrTestConfig())
+	instance, err := manager.Create("nutricionist_1", "1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := manager.get(instance.ID)
+	// Create já passou por attachClient/invalidateQR, então a tentativa corrente
+	// não é zero — consumir com outro número faria o consumidor ignorar tudo.
+	runtime.mu.RLock()
+	attempt := runtime.qrAttempt
+	runtime.mu.RUnlock()
+
+	qrEvents := make(chan whatsmeow.QRChannelItem, 1)
+	qrEvents <- whatsmeow.QRChannelTimeout
+	close(qrEvents)
+	manager.consumeQR(runtime, attempt, qrEvents)
+
+	logs, err := manager.store.ListInstanceLogs(instance.ID, InstanceLogQuery{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range logs {
+		if entry.Event == "pairing_ended" {
+			if got := entry.Details["event"]; got != whatsmeow.QRChannelTimeout.Event {
+				t.Fatalf("pairing_ended registrou event=%v; want %q", got, whatsmeow.QRChannelTimeout.Event)
+			}
+			return
+		}
+	}
+	t.Fatalf("pareamento terminou sem auditar o motivo; eventos gravados: %v", auditedEvents(logs))
+}
+
+func auditedEvents(logs []InstanceLog) []string {
+	names := make([]string, 0, len(logs))
+	for _, entry := range logs {
+		names = append(names, entry.Event)
+	}
+	return names
+}
+
 func TestStaleQRConsumerDoesNotClearNewAttempt(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()

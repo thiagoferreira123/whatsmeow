@@ -27,8 +27,8 @@ func main() {
 	ctx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
 
-	dbLog := waLog.Stdout("DB", "INFO", true)
-	waClientLog := waLog.Stdout("WA", "INFO", true)
+	dbLog := waLog.Stdout("DB", cfg.LogLevel, true)
+	waClientLog := waLog.Stdout("WA", cfg.LogLevel, true)
 
 	// Antes de qualquer pareamento: anunciar versão velha faz o telefone recusar
 	// o QR com "não é possível conectar novos dispositivos no momento".

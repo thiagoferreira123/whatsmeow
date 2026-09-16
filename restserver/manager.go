@@ -998,13 +998,26 @@ func (m *Manager) consumeQR(rt *instanceRuntime, attempt uint64, ch <-chan whats
 			// viva e o código na tela continua valendo. Tratar como terminal
 			// apagava o QR no meio do fluxo, deixando o usuário sem nada para
 			// escanear.
-		default: // success / timeout / error
+		default: // success / timeout / error — encerra a tentativa
 			rt.mu.Lock()
 			if rt.qrAttempt == attempt {
 				rt.qrCode = ""
 				rt.qrExpiresAt = time.Time{}
 			}
 			rt.mu.Unlock()
+			// Sem isto a tentativa morria muda: a auditoria mostrava
+			// pairing_started + N qr_generated e parava, sem dizer POR QUE o
+			// pareamento não fechou. Foi o que escondeu a quebra de 15/09.
+			level, reason := "info", ""
+			if evt.Event != "success" {
+				level = "warning"
+			}
+			if evt.Error != nil {
+				reason = evt.Error.Error()
+			}
+			m.auditInstance(rt.metaCopy().ID, logCategoryConnection, "pairing_ended", level, InstanceLog{
+				Source: "qr", Reason: reason, Details: map[string]any{"event": evt.Event},
+			})
 		}
 	}
 	rt.mu.Lock()
