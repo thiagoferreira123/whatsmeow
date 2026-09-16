@@ -32,7 +32,6 @@ type DisconnectHandler func(ctx context.Context, socket *NoiseSocket, remote boo
 type FrameHandler func(context.Context, []byte)
 
 func newNoiseSocket(
-	ctx context.Context,
 	fs *FrameSocket,
 	writeKey, readKey cipher.AEAD,
 	frameHandler FrameHandler,
@@ -48,7 +47,7 @@ func newNoiseSocket(
 	fs.OnDisconnect = func(ctx context.Context, remote bool, err error) {
 		disconnectHandler(ctx, ns, remote, err)
 	}
-	go ns.consumeFrames(ctx, fs.Frames)
+	go ns.consumeFrames(fs.Context(), fs.Frames)
 	return ns, nil
 }
 

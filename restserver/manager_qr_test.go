@@ -51,6 +51,50 @@ func TestConnectEndpointRestartsStalledFirstQRInsteadOfTimingOut(t *testing.T) {
 	}
 }
 
+// O WhatsApp passou a usar passkey no pareamento: a lib entrega
+// QRChannelItem com Event "passkey-request"/"passkey-confirmation" no MEIO da
+// tentativa, sem terminá-la — o código na tela continua válido e o usuário
+// ainda precisa vê-lo. O consumidor tratava tudo que não é "code" como
+// terminal e apagava o QR, deixando a tela vazia durante o pareamento.
+func TestConsumeQRKeepsCodeOnPasskeyEvents(t *testing.T) {
+	for _, event := range []string{"passkey-request", "passkey-confirmation"} {
+		t.Run(event, func(t *testing.T) {
+			runtime := &instanceRuntime{
+				qrAttempt:   1,
+				qrRunning:   true,
+				qrCode:      "codigo-valido-na-tela",
+				qrExpiresAt: time.Now().Add(time.Minute),
+			}
+			// Sem buffer: o segundo envio só retorna quando o consumidor volta
+			// ao range, ou seja, depois de processar o primeiro. É isso que
+			// torna a asserção determinística, sem sleep.
+			events := make(chan whatsmeow.QRChannelItem)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				(&Manager{}).consumeQR(runtime, 1, events)
+			}()
+
+			events <- whatsmeow.QRChannelItem{Event: event}
+			events <- whatsmeow.QRChannelItem{Event: event}
+
+			runtime.mu.RLock()
+			code, expires := runtime.qrCode, runtime.qrExpiresAt
+			runtime.mu.RUnlock()
+
+			close(events)
+			<-done
+
+			if code != "codigo-valido-na-tela" {
+				t.Fatalf("evento %q apagou o QR em voo: code=%q; want %q", event, code, "codigo-valido-na-tela")
+			}
+			if expires.IsZero() {
+				t.Fatalf("evento %q zerou a validade do QR em voo", event)
+			}
+		})
+	}
+}
+
 func TestStaleQRConsumerDoesNotClearNewAttempt(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()

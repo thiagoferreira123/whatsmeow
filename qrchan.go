@@ -8,7 +8,9 @@ package whatsmeow
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,10 +29,15 @@ type QRChannelItem struct {
 	Code string
 	// The timeout after which the next code will be sent down the channel.
 	Timeout time.Duration
+
+	PasskeyRequest      *events.PairPasskeyRequest
+	PasskeyConfirmation *events.PairPasskeyConfirmation
 }
 
 const QRChannelEventCode = "code"
 const QRChannelEventError = "error"
+const QRChannelEventPasskeyRequest = "passkey-request"
+const QRChannelEventPasskeyResponse = "passkey-confirmation"
 
 // Possible final items in the QR channel. In addition to these, an `error` event may be emitted,
 // in which case the Error field will have the error that occurred during pairing.
@@ -58,10 +65,11 @@ type qrChannel struct {
 	output    chan<- QRChannelItem
 	stopQRs   chan struct{}
 	done      chan struct{}
+	rotateAdv chan *events.RotateADVSecret
 }
 
 func (qrc *qrChannel) close() bool {
-	return qrc.closed.Swap(true) == false
+	return !qrc.closed.Swap(true)
 }
 
 // finish serializes the final channel write and close with regular QR writes.
@@ -103,7 +111,7 @@ func (qrc *qrChannel) emitQRs(codes []string) {
 	for {
 		if len(codes) == 0 {
 			if qrc.finish(&QRChannelTimeout) {
-				qrc.log.Debugf("Ran out of QR codes, closing channel with status %s and disconnecting client", QRChannelTimeout)
+				qrc.log.Debugf("Ran out of QR codes, closing channel with status %s and disconnecting client", QRChannelTimeout.Event)
 				go qrc.cli.RemoveEventHandler(qrc.handlerID)
 				qrc.cli.Disconnect()
 			} else {
@@ -136,6 +144,14 @@ func (qrc *qrChannel) emitQRs(codes []string) {
 		case <-qrc.cli.expectedDisconnect.GetChan():
 			qrc.log.Debugf("Client is expected to disconnect, stopping QR emitter")
 			return
+		case rot := <-qrc.rotateAdv:
+			qrc.log.Debugf("Rotating ADV secrets in remaining QR codes")
+			newCodes := make([]string, len(codes)+1)
+			newCodes[0] = strings.Replace(nextCode, rot.OldSecret, rot.NewSecret, 1)
+			for i, code := range codes {
+				newCodes[i+1] = strings.Replace(code, rot.OldSecret, rot.NewSecret, 1)
+			}
+			codes = newCodes
 		case <-qrc.ctx.Done():
 			qrc.log.Debugf("Context is done, stopping QR emitter")
 			if qrc.finish(nil) {
@@ -158,9 +174,45 @@ func (qrc *qrChannel) handleEvent(rawEvt any) {
 		qrc.log.Debugf("Received QR code event, starting to emit codes to channel")
 		go qrc.emitQRs(slices.Clone(evt.Codes))
 		return
+	case *events.RotateADVSecret:
+		select {
+		case qrc.rotateAdv <- evt:
+		default:
+			qrc.log.Warnf("Rotate ADV channel didn't accept event")
+		}
+		return
 	case *events.QRScannedWithoutMultidevice:
 		qrc.log.Debugf("QR code scanned without multidevice enabled")
 		qrc.send(QRChannelScannedWithoutMultidevice, false)
+		return
+	case *events.PairPasskeyRequest:
+		qrc.send(QRChannelItem{
+			Event:          QRChannelEventPasskeyRequest,
+			PasskeyRequest: evt,
+		}, false)
+		return
+	case *events.PairPasskeyConfirmation:
+		if evt.SkipHandoffUX {
+			qrc.log.Debugf("Sending automatic passkey confirmation")
+			err := qrc.cli.SendPasskeyConfirmation(qrc.ctx)
+			if err != nil {
+				qrc.send(QRChannelItem{
+					Event: QRChannelEventError,
+					Error: fmt.Errorf("failed to send passkey confirmation automatically: %w", err),
+				}, false)
+			}
+		} else {
+			qrc.send(QRChannelItem{
+				Event:               QRChannelEventPasskeyResponse,
+				PasskeyConfirmation: evt,
+			}, false)
+		}
+		return
+	case *events.PairPasskeyError:
+		qrc.send(QRChannelItem{
+			Event: QRChannelEventError,
+			Error: evt.Error,
+		}, false)
 		return
 	case *events.ClientOutdated:
 		outputType = QRChannelClientOutdated
@@ -204,12 +256,13 @@ func (cli *Client) GetQRChannel(ctx context.Context) (<-chan QRChannelItem, erro
 	}
 	ch := make(chan QRChannelItem, 8)
 	qrc := qrChannel{
-		output:  ch,
-		stopQRs: make(chan struct{}),
-		done:    make(chan struct{}),
-		cli:     cli,
-		log:     cli.Log.Sub("QRChannel"),
-		ctx:     ctx,
+		output:    ch,
+		stopQRs:   make(chan struct{}),
+		done:      make(chan struct{}),
+		rotateAdv: make(chan *events.RotateADVSecret, 4),
+		cli:       cli,
+		log:       cli.Log.Sub("QRChannel"),
+		ctx:       ctx,
 	}
 	qrc.handlerID = cli.AddEventHandler(qrc.handleEvent)
 	go func() {

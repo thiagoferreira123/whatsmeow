@@ -980,7 +980,8 @@ func (m *Manager) consumeQR(rt *instanceRuntime, attempt uint64, ch <-chan whats
 		if !current {
 			continue
 		}
-		if evt.Event == whatsmeow.QRChannelEventCode {
+		switch evt.Event {
+		case whatsmeow.QRChannelEventCode:
 			rt.mu.Lock()
 			if rt.qrAttempt != attempt {
 				rt.mu.Unlock()
@@ -992,7 +993,12 @@ func (m *Manager) consumeQR(rt *instanceRuntime, attempt uint64, ch <-chan whats
 			m.auditInstance(rt.metaCopy().ID, logCategoryConnection, "qr_generated", "info", InstanceLog{
 				Status: "connecting", Source: "qr", Details: map[string]any{"expiresInSeconds": int(evt.Timeout.Seconds())},
 			})
-		} else { // success / timeout / error
+		case whatsmeow.QRChannelEventPasskeyRequest, whatsmeow.QRChannelEventPasskeyResponse:
+			// Passos INTERMEDIÁRIOS do pareamento por passkey: a tentativa segue
+			// viva e o código na tela continua valendo. Tratar como terminal
+			// apagava o QR no meio do fluxo, deixando o usuário sem nada para
+			// escanear.
+		default: // success / timeout / error
 			rt.mu.Lock()
 			if rt.qrAttempt == attempt {
 				rt.qrCode = ""
