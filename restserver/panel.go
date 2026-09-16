@@ -55,6 +55,10 @@ func panelMedia(msg *waE2E.Message) (*waE2E.Message, string, uint64) {
 	if inner := msg.GetEphemeralMessage().GetMessage(); inner != nil {
 		return panelMedia(inner)
 	}
+	// A document sent with a caption arrives wrapped; unwrapped it is an ordinary document.
+	if inner := msg.GetDocumentWithCaptionMessage().GetMessage(); inner != nil {
+		return panelMedia(inner)
+	}
 	switch {
 	case msg.GetImageMessage() != nil:
 		x := msg.GetImageMessage()
@@ -68,8 +72,17 @@ func panelMedia(msg *waE2E.Message) (*waE2E.Message, string, uint64) {
 	case msg.GetStickerMessage() != nil:
 		x := msg.GetStickerMessage()
 		return &waE2E.Message{StickerMessage: x}, x.GetMimetype(), x.GetFileLength()
+	case msg.GetDocumentMessage() != nil:
+		x := msg.GetDocumentMessage()
+		return &waE2E.Message{DocumentMessage: x}, x.GetMimetype(), x.GetFileLength()
 	}
 	return nil, "", 0
+}
+
+// panelMediaName is the original file name, which only documents carry.
+func panelMediaName(msg *waE2E.Message) string {
+	media, _, _ := panelMedia(msg)
+	return media.GetDocumentMessage().GetFileName()
 }
 
 func (m *Manager) savePanelMedia(in Instance, id string, msg *waE2E.Message, at time.Time) bool {
@@ -254,6 +267,10 @@ func (h *Handlers) uzPanelMedia(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// The panel needs the original file name to label and save a document.
+	if name := panelMediaName(msg); name != "" {
+		w.Header().Set("X-Media-Filename", url.QueryEscape(name))
+	}
 	w.WriteHeader(200)
 	_, _ = w.Write(content)
 }
@@ -308,16 +325,29 @@ func (h *Handlers) uzPanelAvatar(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(content)
 }
 
+// panelReadBody carries a read marker from the support panel. An absent "read"
+// means "mark as read", so panels built before unread support keep working.
+type panelReadBody struct {
+	Chat      string `json:"chat"`
+	ID        string `json:"id"`
+	Timestamp int64  `json:"timestamp"`
+	Read      *bool  `json:"read"`
+}
+
+func (b panelReadBody) marksRead() bool { return b.Read == nil || *b.Read }
+
+// panelReadPatch marks the chat as read or unread on every linked device.
+func panelReadPatch(jid types.JID, read bool, through time.Time, id string) appstate.PatchInfo {
+	key := &waCommon.MessageKey{RemoteJID: proto.String(jid.String()), ID: proto.String(id), FromMe: proto.Bool(false)}
+	return appstate.BuildMarkChatAsRead(jid, read, through, key)
+}
+
 func (h *Handlers) uzPanelRead(w http.ResponseWriter, r *http.Request) {
 	in, ok := h.panelInstance(w, r)
 	if !ok {
 		return
 	}
-	var body struct {
-		Chat      string `json:"chat"`
-		ID        string `json:"id"`
-		Timestamp int64  `json:"timestamp"`
-	}
+	var body panelReadBody
 	if !readJSON(w, r, &body) {
 		return
 	}
@@ -333,17 +363,19 @@ func (h *Handlers) uzPanelRead(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
-	key := &waCommon.MessageKey{RemoteJID: proto.String(jid.String()), ID: proto.String(body.ID), FromMe: proto.Bool(false)}
-	err = rt.client.SendAppState(ctx, appstate.BuildMarkChatAsRead(jid, true, time.Unix(body.Timestamp, 0), key))
+	read := body.marksRead()
+	err = rt.client.SendAppState(ctx, panelReadPatch(jid, read, time.Unix(body.Timestamp, 0), body.ID))
 	if err != nil {
 		writeErr(w, 503, "WhatsApp did not confirm the read marker")
 		return
 	}
-	// The app-state patch synchronizes linked devices. The receipt updates the sender.
-	_ = rt.client.MarkRead(ctx, []types.MessageID{body.ID}, time.Now(), jid, jid)
-	read := true
+	// The app-state patch synchronizes linked devices. The receipt updates the sender,
+	// and only makes sense while the chat is being marked as read.
+	if read {
+		_ = rt.client.MarkRead(ctx, []types.MessageID{body.ID}, time.Now(), jid, jid)
+	}
 	h.mgr.panelRecord(in, historyRecord{Type: "read", Chat: body.Chat, Read: &read, MessageIDs: []string{body.ID}, ReadThrough: time.Unix(body.Timestamp, 0).UTC().Format(time.RFC3339Nano), Ts: time.Now().UTC().Format(time.RFC3339Nano)})
-	writeJSON(w, 200, map[string]any{"read": true})
+	writeJSON(w, 200, map[string]any{"read": read})
 }
 
 func (h *Handlers) uzPanelResync(w http.ResponseWriter, r *http.Request) {

@@ -70,6 +70,9 @@ func historyText(msg *waE2E.Message) string {
 	if inner := msg.GetViewOnceMessage().GetMessage(); inner != nil {
 		msg = inner
 	}
+	if inner := msg.GetDocumentWithCaptionMessage().GetMessage(); inner != nil {
+		msg = inner
+	}
 	switch {
 	case msg.GetConversation() != "":
 		return msg.GetConversation()
@@ -98,6 +101,7 @@ type historyRecord struct {
 	Text           string   `json:"text,omitempty"`
 	JID            string   `json:"jid,omitempty"` // para pushnames
 	Media          string   `json:"media,omitempty"`
+	MediaName      string   `json:"mediaName,omitempty"` // nome original do arquivo (só documentos)
 	MediaAvailable bool     `json:"mediaAvailable,omitempty"`
 	Snapshot       bool     `json:"snapshot,omitempty"`
 	Read           *bool    `json:"read,omitempty"`
@@ -108,6 +112,9 @@ type historyRecord struct {
 // historyMedia marca presença de mídia sem texto (áudio/imagem sem legenda etc.).
 func historyMedia(msg *waE2E.Message) string {
 	if inner := msg.GetEphemeralMessage().GetMessage(); inner != nil {
+		return historyMedia(inner)
+	}
+	if inner := msg.GetDocumentWithCaptionMessage().GetMessage(); inner != nil {
 		return historyMedia(inner)
 	}
 	switch {
@@ -170,7 +177,7 @@ func (m *Manager) recordLive(instanceID string, v *events.Message, sentByAPI boo
 		Type: "message", SyncType: "LIVE", Chat: v.Info.Chat.String(),
 		MsgID: v.Info.ID, FromMe: v.Info.IsFromMe, SentByApi: sentByAPI,
 		Ts:       v.Info.Timestamp.UTC().Format(time.RFC3339),
-		PushName: v.Info.PushName, Text: text, Media: media, MediaAvailable: available,
+		PushName: v.Info.PushName, Text: text, Media: media, MediaName: panelMediaName(v.Message), MediaAvailable: available,
 	})
 }
 
@@ -249,6 +256,7 @@ func (m *Manager) onHistorySync(instanceID string, v *events.HistorySync) {
 				PushName:       wm.GetPushName(),
 				Text:           text,
 				Media:          media,
+				MediaName:      panelMediaName(wm.GetMessage()),
 				MediaAvailable: available,
 			})
 			msgs++

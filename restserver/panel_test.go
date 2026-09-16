@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waSyncAction"
 	"go.mau.fi/whatsmeow/types"
@@ -83,6 +84,71 @@ func TestPanelIncrementalHistoryDoesNotLosePartialLines(t *testing.T) {
 	h.uzPanelHistory(out, request)
 	if out.Code != 403 {
 		t.Fatal("other instance can access support history")
+	}
+}
+
+func TestPanelArchivesDocumentsIncludingTheCaptionWrapper(t *testing.T) {
+	m := testUazapiCompatManager(t, Config{AdminAPIKey: "synthetic-panel-key"})
+	in := Instance{ID: "support", Name: "agendamento_bot"}
+	doc := &waE2E.DocumentMessage{URL: proto.String("https://example.invalid/plan"), Mimetype: proto.String("application/pdf"),
+		FileName: proto.String("plano-alimentar.pdf"), FileLength: proto.Uint64(2048), Caption: proto.String("Seu plano")}
+	plain := &waE2E.Message{DocumentMessage: doc}
+	wrapped := &waE2E.Message{DocumentWithCaptionMessage: &waE2E.FutureProofMessage{Message: plain}}
+	for name, msg := range map[string]*waE2E.Message{"plain": plain, "wrapped": wrapped} {
+		media, mime, size := panelMedia(msg)
+		if media.GetDocumentMessage() == nil || mime != "application/pdf" || size != 2048 {
+			t.Fatalf("%s document not archived: mime %q size %d", name, mime, size)
+		}
+		if historyMedia(msg) != "document" {
+			t.Fatalf("%s document not classified", name)
+		}
+		if historyText(msg) != "Seu plano" {
+			t.Fatalf("%s document caption lost", name)
+		}
+		if panelMediaName(msg) != "plano-alimentar.pdf" {
+			t.Fatalf("%s file name lost", name)
+		}
+	}
+	if !m.savePanelMedia(in, "doc-one", wrapped, time.Now()) {
+		t.Fatal("document reference not stored")
+	}
+	doc.FileLength = proto.Uint64(panelMaxMedia + 1)
+	if m.savePanelMedia(in, "doc-large", plain, time.Now()) {
+		t.Fatal("oversize document accepted")
+	}
+	if panelMediaName(&waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}) != "" {
+		t.Fatal("only documents carry a file name")
+	}
+}
+
+func TestPanelReadMarkerDefaultsToReadAndSupportsUnread(t *testing.T) {
+	var body panelReadBody
+	if err := json.Unmarshal([]byte(`{"chat":"5511999999999@s.whatsapp.net","id":"one","timestamp":1}`), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.marksRead() {
+		t.Fatal("a request without \"read\" must keep marking the chat as read")
+	}
+	if err := json.Unmarshal([]byte(`{"chat":"5511999999999@s.whatsapp.net","id":"one","timestamp":1,"read":false}`), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.marksRead() {
+		t.Fatal("read:false must mark the chat as unread")
+	}
+	jid := types.NewJID("5511999999999", types.DefaultUserServer)
+	at := time.Unix(1700000000, 0)
+	unread := panelReadPatch(jid, false, at, "one")
+	if unread.Type != appstate.WAPatchRegularLow || len(unread.Mutations) != 1 {
+		t.Fatal("unexpected patch shape")
+	}
+	if unread.Mutations[0].Value.GetMarkChatAsReadAction().GetRead() {
+		t.Fatal("unread patch still marks the chat as read")
+	}
+	if index := unread.Mutations[0].Index; len(index) != 2 || index[0] != appstate.IndexMarkChatAsRead || index[1] != jid.String() {
+		t.Fatalf("patch not scoped to the chat: %v", index)
+	}
+	if !panelReadPatch(jid, true, at, "one").Mutations[0].Value.GetMarkChatAsReadAction().GetRead() {
+		t.Fatal("read patch regressed")
 	}
 }
 

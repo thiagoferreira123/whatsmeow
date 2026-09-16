@@ -209,6 +209,7 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 			msg["media"] = historyMedia(v.Message)
 			msg["text"] = historyText(v.Message)
 			media, _, size := panelMedia(v.Message)
+			msg["mediaName"] = panelMediaName(v.Message)
 			msg["mediaAvailable"] = media != nil && size <= panelMaxMedia
 		}
 		m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
@@ -280,6 +281,7 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 		msg["media"] = historyMedia(v.Message)
 		msg["text"] = historyText(v.Message)
 		media, _, size := panelMedia(v.Message)
+		msg["mediaName"] = panelMediaName(v.Message)
 		msg["mediaAvailable"] = media != nil && size <= panelMaxMedia
 		if am := v.Message.GetAudioMessage(); am != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
