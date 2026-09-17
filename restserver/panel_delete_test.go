@@ -96,6 +96,32 @@ func TestPanelRevokeUpdatesHistoryWithoutBecomingANewMessage(t *testing.T) {
 	}
 }
 
+// ProtocolMessage_REVOKE is the zero value of the enum, so an ordinary message with no
+// protocol part reads as a revoke unless the nil case is rejected first. Getting this
+// wrong swallows every message before the webhook and the panel history.
+func TestOrdinaryMessagesAreNeverTakenForARevoke(t *testing.T) {
+	m := testUazapiCompatManager(t, Config{})
+	in := Instance{ID: "support", Name: "agendamento_bot"}
+	m.runtimes[in.ID] = &instanceRuntime{meta: in}
+	m.history = &historyHarvester{dir: t.TempDir(), targets: map[string]struct{}{"agendamento_bot": {}}}
+	jid := types.NewJID("5511999999999", types.DefaultUserServer)
+	at := time.Now()
+	for name, msg := range map[string]*waE2E.Message{
+		"text":          {Conversation: proto.String("Boa tarde")},
+		"empty":         {},
+		"other_protocol": {ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(), Key: &waCommon.MessageKey{ID: proto.String("x")}}},
+		"revoke_without_key": {ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_REVOKE.Enum()}},
+	} {
+		event := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: jid}, ID: "incoming", Timestamp: at}, Message: msg}
+		if m.panelMessageDelete(in.ID, event) {
+			t.Fatalf("%s message was swallowed as a revoke", name)
+		}
+	}
+	if _, err := os.ReadFile(filepath.Join(m.history.dir, "agendamento_bot.jsonl")); err == nil {
+		t.Fatal("an ordinary message must not produce a delete record")
+	}
+}
+
 func TestPanelIncomingRevokeIsRecordedWithoutTouchingRequests(t *testing.T) {
 	m := testUazapiCompatManager(t, Config{})
 	in := Instance{ID: "support", Name: "agendamento_bot"}

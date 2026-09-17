@@ -24,13 +24,18 @@ func (m *Manager) panelMessageDelete(instanceID string, event *events.Message) b
 	if rt == nil || rt.metaCopy().Name != "agendamento_bot" {
 		return false
 	}
+	// REVOKE is the zero value of the enum: without the nil check every ordinary message
+	// would read as a revocation and never reach the webhook or the panel history.
 	p := event.Message.GetProtocolMessage()
-	if p.GetType() != waE2E.ProtocolMessage_REVOKE {
+	if p == nil || p.GetType() != waE2E.ProtocolMessage_REVOKE {
 		return false
 	}
 	id := p.GetKey().GetID()
+	if id == "" || len(id) > 200 {
+		return false
+	}
 	at := event.Info.Timestamp
-	if id == "" || len(id) > 200 || at.IsZero() || at.After(time.Now().Add(5*time.Minute)) {
+	if at.IsZero() || at.After(time.Now().Add(5*time.Minute)) {
 		return true
 	}
 	in := rt.metaCopy()
