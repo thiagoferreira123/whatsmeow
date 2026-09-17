@@ -100,6 +100,9 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 	if m.panelMessageEdit(instanceID, v) {
 		return
 	}
+	if m.panelMessageDelete(instanceID, v) {
+		return
+	}
 	if v.Info.IsFromMe {
 		m.onOwnMessage(instanceID, v)
 		return

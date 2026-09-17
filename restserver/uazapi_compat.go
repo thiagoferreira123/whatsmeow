@@ -58,6 +58,7 @@ func (h *Handlers) registerUazapiCompat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /instance/panel/avatar", h.uzPanelAvatar)
 	mux.HandleFunc("POST /instance/panel/read", h.uzPanelRead)
 	mux.HandleFunc("POST /instance/panel/edit", h.uzPanelEdit)
+	mux.HandleFunc("POST /instance/panel/delete", h.uzPanelDelete)
 	mux.HandleFunc("POST /instance/panel/resync", h.uzPanelResync)
 	mux.HandleFunc("POST /instance/panel/backfill", h.uzPanelBackfill)
 	mux.HandleFunc("POST /instance/panel/bootstrap", h.uzPanelBootstrap)
