@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -60,6 +61,12 @@ func (m *Manager) onGroupMessage(instanceID string, v *events.Message) {
 	if in.Name != "agendamento_bot" || in.WebhookURL == "" || !in.WebhookEnabled {
 		return
 	}
+	// A distribuição da chave do grupo (sender key) e as mensagens de protocolo chegam
+	// como eventos próprios com o id da mensagem real; sem conteúdo, não ocupam a vaga
+	// da deduplicação — senão o painel recebe uma bolha vazia e o texto se perde.
+	if !groupPartHasContent(v.Message) {
+		return
+	}
 	// O mesmo evento chega em todas as sessões pareadas do número; entrega uma vez.
 	if !m.webhooks.dedup("group:" + v.Info.ID) {
 		return
@@ -78,6 +85,19 @@ func (m *Manager) onGroupMessage(instanceID string, v *events.Message) {
 	available := m.savePanelMedia(in, v.Info.ID, v.Message, v.Info.Timestamp)
 	msg := groupWebhookMessage(v, sentByAPI, m.groupName(rt, v.Info.Chat), available)
 	m.webhooks.deliver(in.WebhookURL, webhookSecretFor(in, m.cfg), messageWebhookPayload(in, msg))
+}
+
+// groupPartHasContent diz se um evento de grupo traz algo que o painel mostre. Uma
+// parte que só carrega a sender key ou uma mensagem de protocolo (revogação, edição)
+// não traz texto nem mídia; a parte com o conteúdo vem em seguida, com o mesmo id.
+func groupPartHasContent(msg *waE2E.Message) bool {
+	if msg == nil {
+		return false
+	}
+	if msg.GetSenderKeyDistributionMessage() == nil && msg.GetProtocolMessage() == nil {
+		return true
+	}
+	return historyText(msg) != "" || historyMedia(msg) != ""
 }
 
 // groupWebhookMessage é a mensagem do webhook por instância para um grupo: o chat

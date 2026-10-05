@@ -182,3 +182,33 @@ func TestGroupNameCacheExpiresAndFollowsSubjectChanges(t *testing.T) {
 		t.Fatalf("expired entry served: %q", name)
 	}
 }
+
+// O WhatsApp entrega a chave de grupo (sender key) como uma parte separada da MESMA
+// mensagem: a biblioteca despacha primeiro um evento só com a distribuição da chave e
+// depois o conteúdo, os dois com o mesmo id. A parte sem conteúdo não pode ocupar a
+// vaga da deduplicação, senão o painel recebe uma bolha vazia e o texto se perde.
+func TestGroupSenderKeyPartDoesNotSwallowTheContent(t *testing.T) {
+	m, store := panelManager(t)
+	keyPart := groupEvent("group-1", false)
+	keyPart.Message = &waE2E.Message{SenderKeyDistributionMessage: &waE2E.SenderKeyDistributionMessage{GroupID: proto.String(testGroup + "@g.us")}}
+	m.onGroupMessage("instance-1", keyPart)
+	m.onGroupMessage("instance-1", groupEvent("group-1", false))
+	got := queuedMessages(t, m, store)
+	if len(got) != 1 || got[0]["text"] != "Alguém usa o DietSystem?" {
+		t.Fatalf("expected the group content delivered once, got %v", got)
+	}
+	// Mensagens de protocolo (revogação, edição) também não viram bolha vazia no painel.
+	revoke := groupEvent("group-2", false)
+	revoke.Message = &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_REVOKE.Enum()}}
+	m.onGroupMessage("instance-1", revoke)
+	if got := queuedMessages(t, m, store); len(got) != 1 {
+		t.Fatalf("a part without text or media must not reach the panel: %v", got)
+	}
+	// Uma parte que traz a chave junto com o texto continua chegando normalmente.
+	both := groupEvent("group-3", false)
+	both.Message.SenderKeyDistributionMessage = &waE2E.SenderKeyDistributionMessage{GroupID: proto.String(testGroup + "@g.us")}
+	m.onGroupMessage("instance-1", both)
+	if got := queuedMessages(t, m, store); len(got) != 2 || got[1]["text"] != "Alguém usa o DietSystem?" {
+		t.Fatalf("content delivered together with the key was lost: %v", got)
+	}
+}
