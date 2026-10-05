@@ -129,6 +129,11 @@ func (m *Manager) panelRecord(in Instance, record historyRecord) {
 	_ = json.NewEncoder(f).Encode(record)
 }
 
+// panelChat: chats the support panel follows — direct (phone or LID) and groups.
+func panelChat(jid types.JID) bool {
+	return jid.Server == types.DefaultUserServer || jid.Server == types.HiddenUserServer || jid.Server == types.GroupServer
+}
+
 func (m *Manager) panelRead(instanceID string, evt any) {
 	rt := m.get(instanceID)
 	if rt == nil {
@@ -141,7 +146,7 @@ func (m *Manager) panelRead(instanceID string, evt any) {
 	record := historyRecord{Type: "read"}
 	switch v := evt.(type) {
 	case *events.MarkChatAsRead:
-		if v.JID.Server != types.DefaultUserServer && v.JID.Server != types.HiddenUserServer {
+		if !panelChat(v.JID) {
 			return
 		}
 		read := v.Action.GetRead()
@@ -153,7 +158,7 @@ func (m *Manager) panelRead(instanceID string, evt any) {
 			record.ReadThrough = time.Unix(through, 0).UTC().Format(time.RFC3339Nano)
 		}
 	case *events.Receipt:
-		if v.Type != types.ReceiptTypeReadSelf || v.IsGroup {
+		if v.Type != types.ReceiptTypeReadSelf {
 			return
 		}
 		read := true
@@ -282,7 +287,7 @@ func (h *Handlers) uzPanelAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jid, err := types.ParseJID(r.URL.Query().Get("number"))
-	if err != nil || (jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer) {
+	if err != nil || !panelChat(jid) {
 		writeErr(w, 400, "invalid contact")
 		return
 	}
@@ -353,7 +358,7 @@ func (h *Handlers) uzPanelRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jid, err := types.ParseJID(body.Chat)
-	if err != nil || (jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer) || body.ID == "" || len(body.ID) > 200 || body.Timestamp <= 0 || body.Timestamp > time.Now().Add(time.Minute).Unix() {
+	if err != nil || !panelChat(jid) || body.ID == "" || len(body.ID) > 200 || body.Timestamp <= 0 || body.Timestamp > time.Now().Add(time.Minute).Unix() {
 		writeErr(w, 400, "invalid read marker")
 		return
 	}
@@ -371,8 +376,9 @@ func (h *Handlers) uzPanelRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The app-state patch synchronizes linked devices. The receipt updates the sender,
-	// and only makes sense while the chat is being marked as read.
-	if read {
+	// and only makes sense while the chat is being marked as read. In a group the receipt
+	// would need the member who wrote each message; the patch alone marks the group read.
+	if read && jid.Server != types.GroupServer {
 		_ = rt.client.MarkRead(ctx, []types.MessageID{body.ID}, time.Now(), jid, jid)
 	}
 	h.mgr.panelRecord(in, historyRecord{Type: "read", Chat: body.Chat, Read: &read, MessageIDs: []string{body.ID}, ReadThrough: time.Unix(body.Timestamp, 0).UTC().Format(time.RFC3339Nano), Ts: time.Now().UTC().Format(time.RFC3339Nano)})
@@ -428,7 +434,7 @@ func (h *Handlers) uzPanelBackfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jid, err := types.ParseJID(body.Chat)
-	if err != nil || (jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer) || body.ID == "" || len(body.ID) > 200 || body.Timestamp <= 0 || body.Timestamp > time.Now().Add(time.Minute).Unix() {
+	if err != nil || !panelChat(jid) || body.ID == "" || len(body.ID) > 200 || body.Timestamp <= 0 || body.Timestamp > time.Now().Add(time.Minute).Unix() {
 		writeErr(w, 400, "invalid history boundary")
 		return
 	}

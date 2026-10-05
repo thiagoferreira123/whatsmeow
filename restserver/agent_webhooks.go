@@ -50,10 +50,13 @@ func (m *Manager) enqueueAgentWebhook(url string, payload any) bool {
 	if messageID == "" {
 		return false
 	}
-	// Never store tokens or the redundant operator display name in the delivery queue.
+	// Never store tokens in the delivery queue. The display name is redundant in a direct
+	// chat (the conversation names the contact); in a group it is the only thing that tells
+	// the panel who wrote, so it travels with group messages.
+	isGroup, _ := message["isGroup"].(bool)
 	cleanMessage := make(map[string]any)
 	for k, v := range message {
-		if k != "pushName" {
+		if k != "pushName" || isGroup {
 			cleanMessage[k] = v
 		}
 	}

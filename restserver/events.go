@@ -58,6 +58,8 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 			m.panelRead(instanceID, v)
 		case *events.Receipt:
 			m.panelRead(instanceID, v)
+		case *events.GroupInfo:
+			m.onGroupInfo(v)
 		case *events.Connected:
 			m.onConnected(instanceID)
 		case *events.PairSuccess:
@@ -95,6 +97,8 @@ func (m *Manager) makeHandler(instanceID string) func(interface{}) {
 
 func (m *Manager) onMessage(instanceID string, v *events.Message) {
 	if v.Info.IsGroup {
+		// Só o painel de atendimento vê grupos (group_messages.go); nada abaixo se aplica.
+		m.onGroupMessage(instanceID, v)
 		return
 	}
 	if m.panelMessageEdit(instanceID, v) {

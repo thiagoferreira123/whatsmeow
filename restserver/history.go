@@ -98,6 +98,7 @@ type historyRecord struct {
 	SentByApi      bool     `json:"sentByApi,omitempty"` // fromMe originado por esta API (bot) vs humano
 	Ts             string   `json:"ts,omitempty"`
 	PushName       string   `json:"pushName,omitempty"`
+	GroupName      string   `json:"groupName,omitempty"` // assunto, só em chats de grupo
 	Text           string   `json:"text,omitempty"`
 	JID            string   `json:"jid,omitempty"` // para pushnames
 	Media          string   `json:"media,omitempty"`
@@ -214,6 +215,10 @@ func (m *Manager) onHistorySync(instanceID string, v *events.HistorySync) {
 	for _, conv := range data.GetConversations() {
 		convs++
 		chat := conv.GetID()
+		groupName := ""
+		if strings.HasSuffix(chat, "@g.us") {
+			groupName = conv.GetName()
+		}
 		if in.Name == "agendamento_bot" && (conv.UnreadCount != nil || conv.MarkedAsUnread != nil) {
 			read := conv.GetUnreadCount() == 0 && !conv.GetMarkedAsUnread()
 			_ = enc.Encode(historyRecord{Type: "read", Snapshot: true, Chat: chat, Read: &read, ReadThrough: time.Unix(int64(conv.GetConversationTimestamp()), 0).UTC().Format(time.RFC3339Nano), Ts: time.Now().UTC().Format(time.RFC3339Nano)})
@@ -254,6 +259,7 @@ func (m *Manager) onHistorySync(instanceID string, v *events.HistorySync) {
 				FromMe:         wm.GetKey().GetFromMe(),
 				Ts:             time.Unix(int64(wm.GetMessageTimestamp()), 0).UTC().Format(time.RFC3339),
 				PushName:       wm.GetPushName(),
+				GroupName:      groupName,
 				Text:           text,
 				Media:          media,
 				MediaName:      panelMediaName(wm.GetMessage()),

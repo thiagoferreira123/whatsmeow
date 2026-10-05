@@ -83,6 +83,9 @@ type Manager struct {
 	sentEchoMu  sync.Mutex
 	sentEchoIDs map[string]time.Time
 
+	// groupNames: assunto dos grupos exibidos no painel de atendimento (group_messages.go).
+	groupNames groupNameCache
+
 	// history: colheita opt-in de HistorySync para mineração de base (history.go)
 	history *historyHarvester
 
