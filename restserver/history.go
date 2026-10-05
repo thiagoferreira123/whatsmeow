@@ -98,7 +98,8 @@ type historyRecord struct {
 	SentByApi      bool     `json:"sentByApi,omitempty"` // fromMe originado por esta API (bot) vs humano
 	Ts             string   `json:"ts,omitempty"`
 	PushName       string   `json:"pushName,omitempty"`
-	GroupName      string   `json:"groupName,omitempty"` // assunto, só em chats de grupo
+	GroupName      string   `json:"groupName,omitempty"`   // assunto, só em chats de grupo
+	Participant    string   `json:"participant,omitempty"` // quem escreveu, só em chats de grupo
 	Text           string   `json:"text,omitempty"`
 	JID            string   `json:"jid,omitempty"` // para pushnames
 	Media          string   `json:"media,omitempty"`
@@ -260,6 +261,7 @@ func (m *Manager) onHistorySync(instanceID string, v *events.HistorySync) {
 				Ts:             time.Unix(int64(wm.GetMessageTimestamp()), 0).UTC().Format(time.RFC3339),
 				PushName:       wm.GetPushName(),
 				GroupName:      groupName,
+				Participant:    wm.GetParticipant(),
 				Text:           text,
 				Media:          media,
 				MediaName:      panelMediaName(wm.GetMessage()),
