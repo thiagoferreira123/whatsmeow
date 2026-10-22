@@ -116,7 +116,9 @@ func (m *Manager) onMessage(instanceID string, v *events.Message) {
 		return
 	}
 	text := extractText(v.Message)
-	if !m.webhooks.dedup(v.Info.ID) {
+	// The same number can be paired in several instances with different webhooks
+	// (welcome_bot and nutricionist_46): every instance delivers its own copy once.
+	if !m.webhooks.dedup("in:" + instanceID + ":" + v.Info.ID) {
 		return
 	}
 	m.recordLive(instanceID, v, false)
