@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -98,18 +100,9 @@ func buildMediaMessageBytes(ctx context.Context, cli *whatsmeow.Client, mediaTyp
 		mediaType = inferMediaType(mime)
 	}
 
-	var waType whatsmeow.MediaType
-	switch mediaType {
-	case "image":
-		waType = whatsmeow.MediaImage
-	case "video":
-		waType = whatsmeow.MediaVideo
-	case "audio":
-		waType = whatsmeow.MediaAudio
-	case "document", "doc", "file":
-		waType = whatsmeow.MediaDocument
-	default:
-		return nil, fmt.Errorf("unsupported media type %q (use image|video|audio|document)", mediaType)
+	waType, ptt, err := resolveMediaKind(mediaType)
+	if err != nil {
+		return nil, err
 	}
 
 	up, err := cli.Upload(ctx, data, waType)
@@ -142,15 +135,7 @@ func buildMediaMessageBytes(ctx context.Context, cli *whatsmeow.Client, mediaTyp
 			Caption:       optString(caption),
 		}
 	case whatsmeow.MediaAudio:
-		msg.AudioMessage = &waE2E.AudioMessage{
-			URL:           proto.String(up.URL),
-			DirectPath:    proto.String(up.DirectPath),
-			MediaKey:      up.MediaKey,
-			FileEncSHA256: up.FileEncSHA256,
-			FileSHA256:    up.FileSHA256,
-			FileLength:    proto.Uint64(up.FileLength),
-			Mimetype:      proto.String(mime),
-		}
+		msg.AudioMessage = audioMessage(up, data, mime, ptt)
 	case whatsmeow.MediaDocument:
 		name := strings.TrimSpace(fileName)
 		if name == "" {
@@ -176,4 +161,69 @@ func optString(s string) *string {
 		return nil
 	}
 	return proto.String(s)
+}
+
+// resolveMediaKind maps the request "type" to a WhatsApp media type. The
+// voice-note aliases (ptt/myaudio/voice) upload as audio and flag PTT so the
+// message renders as a recorded voice note instead of an audio file.
+func resolveMediaKind(mediaType string) (whatsmeow.MediaType, bool, error) {
+	switch mediaType {
+	case "image":
+		return whatsmeow.MediaImage, false, nil
+	case "video":
+		return whatsmeow.MediaVideo, false, nil
+	case "audio":
+		return whatsmeow.MediaAudio, false, nil
+	case "ptt", "myaudio", "voice":
+		return whatsmeow.MediaAudio, true, nil
+	case "document", "doc", "file":
+		return whatsmeow.MediaDocument, false, nil
+	default:
+		return "", false, fmt.Errorf("unsupported media type %q (use image|video|audio|ptt|document)", mediaType)
+	}
+}
+
+const voiceNoteMime = "audio/ogg; codecs=opus"
+
+func audioMessage(up whatsmeow.UploadResponse, data []byte, mime string, ptt bool) *waE2E.AudioMessage {
+	msg := &waE2E.AudioMessage{
+		URL:           proto.String(up.URL),
+		DirectPath:    proto.String(up.DirectPath),
+		MediaKey:      up.MediaKey,
+		FileEncSHA256: up.FileEncSHA256,
+		FileSHA256:    up.FileSHA256,
+		FileLength:    proto.Uint64(up.FileLength),
+		Mimetype:      proto.String(mime),
+	}
+	if ptt {
+		msg.PTT = proto.Bool(true)
+		msg.Mimetype = proto.String(voiceNoteMime)
+		if seconds := oggOpusSeconds(data); seconds > 0 {
+			msg.Seconds = proto.Uint32(seconds)
+		}
+	}
+	return msg
+}
+
+// oggOpusSeconds returns the duration of an Ogg/Opus stream, rounded up: the
+// last page's granule position minus the OpusHead pre-skip, at 48 kHz.
+// Returns 0 when the data is not Ogg/Opus.
+func oggOpusSeconds(data []byte) uint32 {
+	if len(data) < 27 || !bytes.HasPrefix(data, []byte("OggS")) {
+		return 0
+	}
+	last := bytes.LastIndex(data, []byte("OggS"))
+	if last < 0 || last+14 > len(data) {
+		return 0
+	}
+	granule := binary.LittleEndian.Uint64(data[last+6 : last+14])
+	var preSkip uint64
+	if head := bytes.Index(data, []byte("OpusHead")); head >= 0 && head+12 <= len(data) {
+		preSkip = uint64(binary.LittleEndian.Uint16(data[head+10 : head+12]))
+	}
+	if granule <= preSkip {
+		return 0
+	}
+	samples := granule - preSkip
+	return uint32((samples + 47999) / 48000)
 }

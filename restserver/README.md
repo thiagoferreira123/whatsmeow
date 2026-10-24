@@ -74,6 +74,7 @@ Postman, Insomnia e geradores de SDK está em **`GET /openapi.json`** (OpenAPI 3
 | `GET /instances/{id}/status` | — | `{status, loggedIn, connected, owner, profileName, sendingBlockedUntil}` |
 | `POST /instances/{id}/send/text` | `{number, text, async?, idempotencyKey?}` | síncrono `200` ou enfileirado `202` |
 | `POST /instances/{id}/send/media` | **JSON:** `{number, type?, file:URL\|base64\|dataURI, text?, fileName?, async?, idempotencyKey?}` · **ou upload:** `multipart/form-data` | síncrono `200` ou JSON enfileirado `202` |
+| | `type`: `image` · `video` · `audio` (arquivo) · `ptt`/`myaudio`/`voice` (nota de voz: OGG/Opus, `PTT=true`, duração lida do Ogg) · `document` | |
 | `GET /instances/{id}/queue` | query `status?`, `limit?` | resumo, jobs e prontidão da sessão |
 | `DELETE /instances/{id}/queue` | — | cancela jobs ainda pendentes |
 | `GET /instances/{id}/logs` | query `limit?`, `before?`, `category?`, `level?` | histórico paginado de conexão, envios, fila e sistema |
