@@ -478,6 +478,7 @@ func (h *Handlers) createBroadcastForInstance(w http.ResponseWriter, r *http.Req
 			Number string `json:"number"`
 			Text   string `json:"text"`
 			Type   string `json:"type"`
+			File   string `json:"file"`
 		} `json:"messages"`
 		DelayMin int `json:"delayMin"`
 		DelayMax int `json:"delayMax"`
@@ -494,8 +495,23 @@ func (h *Handlers) createBroadcastForInstance(w http.ResponseWriter, r *http.Req
 		return
 	}
 	for _, message := range body.Messages {
-		if strings.TrimSpace(message.Number) == "" || strings.TrimSpace(message.Text) == "" || (message.Type != "" && message.Type != "text") {
-			writeErr(w, http.StatusBadRequest, "each message must contain number and text with type text")
+		if strings.TrimSpace(message.Number) == "" {
+			writeErr(w, http.StatusBadRequest, "each message must contain number")
+			return
+		}
+		switch message.Type {
+		case "", "text":
+			if strings.TrimSpace(message.Text) == "" {
+				writeErr(w, http.StatusBadRequest, "text messages must contain text")
+				return
+			}
+		case "image":
+			if strings.TrimSpace(message.File) == "" {
+				writeErr(w, http.StatusBadRequest, "image messages must contain file")
+				return
+			}
+		default:
+			writeErr(w, http.StatusBadRequest, "message type must be text or image")
 			return
 		}
 	}
@@ -521,7 +537,15 @@ func (h *Handlers) createBroadcastForInstance(w http.ResponseWriter, r *http.Req
 			availableAt = availableAt.Add(time.Duration(delay) * time.Second)
 		}
 		key := "broadcast:" + folderID + ":" + fmt.Sprint(index)
-		if _, _, err := h.mgr.EnqueueTextAtFrom(in.ID, message.Number, message.Text, key, "broadcast", availableAt); handleErr(w, err) {
+		var err error
+		if message.Type == "image" {
+			_, _, err = h.mgr.EnqueueMediaAtFrom(in.ID, queuedMediaPayload{
+				Number: message.Number, Type: message.Type, File: message.File, Text: message.Text,
+			}, key, "broadcast", availableAt)
+		} else {
+			_, _, err = h.mgr.EnqueueTextAtFrom(in.ID, message.Number, message.Text, key, "broadcast", availableAt)
+		}
+		if handleErr(w, err) {
 			return
 		}
 	}

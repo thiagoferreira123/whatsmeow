@@ -481,13 +481,17 @@ func (m *Manager) EnqueueMedia(instanceID string, payload queuedMediaPayload, ke
 }
 
 func (m *Manager) EnqueueMediaFrom(instanceID string, payload queuedMediaPayload, key, source string) (QueueJob, bool, error) {
+	return m.EnqueueMediaAtFrom(instanceID, payload, key, source, time.Now())
+}
+
+func (m *Manager) EnqueueMediaAtFrom(instanceID string, payload queuedMediaPayload, key, source string, availableAt time.Time) (QueueJob, bool, error) {
 	if m.get(instanceID) == nil {
 		return QueueJob{}, false, errNotFound
 	}
 	if strings.TrimSpace(payload.Number) == "" || strings.TrimSpace(payload.File) == "" {
 		return QueueJob{}, false, &apiError{Status: 400, Msg: "number and file are required"}
 	}
-	job, created, err := m.store.Enqueue(instanceID, key, "media", payload, m.cfg.QueueMaxAttempts)
+	job, created, err := m.store.EnqueueAt(instanceID, key, "media", payload, m.cfg.QueueMaxAttempts, availableAt)
 	if created {
 		m.stats.queueEnqueued.Add(1)
 		messageType := payload.Type
