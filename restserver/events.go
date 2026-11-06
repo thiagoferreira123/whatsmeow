@@ -249,8 +249,10 @@ func (m *Manager) onOwnMessage(instanceID string, v *events.Message) {
 	if in.WebhookURL == "" || !in.WebhookEnabled {
 		return
 	}
-	// o mesmo eco chega em todas as sessões pareadas do número; entrega uma vez
-	if !m.webhooks.dedup("own:" + v.Info.ID) {
+	// o mesmo eco chega em todas as instâncias pareadas do número (welcome_bot e
+	// nutricionist_46): entrega uma vez POR INSTÂNCIA, senão a primeira engole o
+	// eco e o SDR da outra nunca vê que o humano assumiu a conversa
+	if !m.webhooks.dedup("own:" + instanceID + ":" + v.Info.ID) {
 		return
 	}
 	sentByAPI := m.wasSentByAPI(v.Info.ID)
