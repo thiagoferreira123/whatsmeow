@@ -2,7 +2,7 @@
 # local go.mau.fi/whatsmeow). No Coolify: Base Directory "/", Dockerfile "restserver/Dockerfile".
 # CGO-free (modernc.org/sqlite) → binário estático, roda em qualquer arch (host é arm64/Graviton).
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.27.4-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

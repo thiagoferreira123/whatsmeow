@@ -224,3 +224,14 @@ para carregar o `status`. Não existe mais 504 nem 500 cru nesse fluxo.
   para o web trocar só a base-URL.
 - Pairing code por número (`PairPhone`), perfil completo (foto/business), envio em lote/broadcast.
 - Recebimento de mídia, resolução LID↔telefone mais robusta, auth multi-tenant por instância.
+
+## Cria??o idempotente e identidade de envio
+
+`POST /instances` aceita `Idempotency-Key` (at? 200 caracteres). Repeti??es com
+o mesmo conte?do retornam a mesma inst?ncia; conte?do divergente retorna 409.
+O identificador determin?stico ? gravado junto ? inst?ncia, sem uma segunda
+escrita que possa falhar ap?s a cria??o. Sem chave, o comportamento ? preservado.
+
+Mensagens da fila derivam um identificador WhatsApp est?vel do ID persistido
+do job. Timeout ou rein?cio n?o geram uma nova identidade de envio. Isso reduz
+duplica??es em resultados amb?guos; n?o ? uma promessa de entrega exatamente uma vez.

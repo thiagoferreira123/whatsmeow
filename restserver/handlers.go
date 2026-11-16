@@ -163,9 +163,8 @@ func (h *Handlers) createInstance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	in, err := h.mgr.Create(body.Name, body.AdminField01, body.WebhookURL, body.WebhookSecret)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	in, err := h.mgr.CreateIdempotent(r.Header.Get("Idempotency-Key"), body.Name, body.AdminField01, body.WebhookURL, body.WebhookSecret)
+	if handleErr(w, err) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, in)

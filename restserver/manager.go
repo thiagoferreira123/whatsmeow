@@ -163,7 +163,7 @@ func (m *Manager) wasSentByAPI(id string) bool {
 // sendRecorded sends msg with a pre-generated message ID already registered in
 // sentEchoIDs, so the fromMe echo never races the classification.
 func (m *Manager) sendRecorded(ctx context.Context, rt *instanceRuntime, jid types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
-	msgID := rt.client.GenerateMessageID()
+	msgID := outboundMessageID(sendAuditFromContext(ctx).QueueJobID, func() string { return rt.client.GenerateMessageID() })
 	m.recordSentEchoID(msgID)
 	response, err := rt.client.SendMessage(ctx, jid, msg, whatsmeow.SendRequestExtra{ID: msgID})
 	if err == nil && msg.GetConversation() != "" {
@@ -481,9 +481,13 @@ const (
 
 // Create registers a new instance (no pairing yet — call GetQR to pair).
 func (m *Manager) Create(name, adminField01, webhookURL, webhookSecret string) (Instance, error) {
+	return m.createWithID(uuid.NewString(), name, adminField01, webhookURL, webhookSecret)
+}
+
+func (m *Manager) createWithID(id, name, adminField01, webhookURL, webhookSecret string) (Instance, error) {
 	now := nowRFC()
 	in := Instance{
-		ID:                     uuid.NewString(),
+		ID:                     id,
 		Name:                   name,
 		Token:                  randToken(),
 		AdminField01:           adminField01,

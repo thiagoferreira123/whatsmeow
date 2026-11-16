@@ -2,7 +2,7 @@ module go.mau.fi/whatsmeow
 
 go 1.26.0
 
-toolchain go1.27.1
+toolchain go1.27.4
 
 require (
 	github.com/beeper/argo-go v1.1.2
@@ -13,7 +13,7 @@ require (
 	go.mau.fi/libsignal v0.2.2
 	go.mau.fi/util v0.10.1
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.52.0
