@@ -14,6 +14,7 @@ import (
 )
 
 func TestLoadAllKeepsHundredsOfInstancesInOneRuntime(t *testing.T) {
+	t.Setenv("MAX_INSTANCES", "500")
 	db, err := sql.Open("sqlite", "file:scale-500?mode=memory&cache=shared&_pragma=foreign_keys(on)")
 	if err != nil {
 		t.Fatal(err)
@@ -46,6 +47,33 @@ func TestLoadAllKeepsHundredsOfInstancesInOneRuntime(t *testing.T) {
 	}
 	if got := len(mgr.runtimes); got != 500 {
 		t.Fatalf("loaded runtimes = %d, want 500", got)
+	}
+}
+
+func TestLastInstanceSlotIsAtomic(t *testing.T) {
+	m := testUazapiCompatManager(t, Config{})
+	for i := 0; i < 299; i++ {
+		if _, err := m.Create(fmt.Sprint(i), "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := m.Create("last slot", "", "", "")
+			results <- err
+		}()
+	}
+	var successes int
+	for i := 0; i < 2; i++ {
+		if err := <-results; err == nil {
+			successes++
+		} else if err.Error() != "instance capacity reached" {
+			t.Fatal(err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("created %d instances for one remaining slot", successes)
 	}
 }
 

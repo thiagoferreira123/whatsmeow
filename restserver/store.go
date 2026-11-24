@@ -147,6 +147,7 @@ CREATE INDEX IF NOT EXISTS outbound_queue_instance
 // *sql.DB as whatsmeow's sqlstore container (same SQLite file).
 type Store struct {
 	db             *sql.DB
+	maxInstances   int
 	outboundWrites atomic.Uint64
 }
 
@@ -176,7 +177,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, maxInstances: getenvInt("MAX_INSTANCES", 300)}, nil
 }
 
 // RecoverAfterRuntimeTakeover mutates queue state only after this process owns
@@ -230,14 +231,22 @@ func scanInstance(s rowScanner) (Instance, error) {
 }
 
 func (s *Store) Create(in *Instance) error {
-	_, err := s.db.Exec(
-		`INSERT INTO instances (`+instanceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	result, err := s.db.Exec(
+		`INSERT INTO instances (`+instanceCols+`) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+		 WHERE (SELECT COUNT(*) FROM instances) < ?`,
 		in.ID, in.Name, in.JID, in.Token, in.AdminField01,
 		in.WebhookURL, in.WebhookSecret, in.WebhookEvents, in.WebhookExcludeMessages,
 		b2i(in.WebhookEnabled), b2i(in.WebhookAddURLEvents), b2i(in.WebhookAddURLTypesMessages),
 		in.Status, in.ProfileName, in.ProfilePicUrl, b2i(in.IsBusiness), in.Owner,
-		in.CreatedAt, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.LastResetAt,
+		in.CreatedAt, in.UpdatedAt, in.LastDisconnectReason, in.SendingBlockedUntil, in.LastResetAt, s.maxInstances,
 	)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err == nil && count == 0 {
+		return &apiError{Status: 409, Msg: "instance capacity reached"}
+	}
 	return err
 }
 
