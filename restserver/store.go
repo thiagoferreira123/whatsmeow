@@ -241,12 +241,13 @@ func (s *Store) Create(in *Instance) error {
 	return err
 }
 
-// Save updates every mutable column for the given instance id.
+// Token changes use a dedicated compare-and-swap so a stale runtime save
+// cannot restore a revoked credential.
 func (s *Store) Save(in *Instance) error {
 	in.UpdatedAt = nowRFC()
 	_, err := s.db.Exec(
-		`UPDATE instances SET name=?,jid=?,token=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_exclude_messages=?,webhook_enabled=?,webhook_add_url_events=?,webhook_add_url_types_messages=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=?,sending_blocked_until=?,last_reset_at=? WHERE id=?`,
-		in.Name, in.JID, in.Token, in.AdminField01, in.WebhookURL, in.WebhookSecret,
+		`UPDATE instances SET name=?,jid=?,admin_field01=?,webhook_url=?,webhook_secret=?,webhook_events=?,webhook_exclude_messages=?,webhook_enabled=?,webhook_add_url_events=?,webhook_add_url_types_messages=?,status=?,profile_name=?,profile_pic_url=?,is_business=?,owner=?,updated_at=?,last_disconnect_reason=?,sending_blocked_until=?,last_reset_at=? WHERE id=?`,
+		in.Name, in.JID, in.AdminField01, in.WebhookURL, in.WebhookSecret,
 		in.WebhookEvents, in.WebhookExcludeMessages, b2i(in.WebhookEnabled),
 		b2i(in.WebhookAddURLEvents), b2i(in.WebhookAddURLTypesMessages),
 		in.Status, in.ProfileName, in.ProfilePicUrl,

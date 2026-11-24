@@ -69,6 +69,7 @@ func (h *Handlers) Router() http.Handler {
 	mux.HandleFunc("POST /instances", h.createInstance)
 	mux.HandleFunc("GET /instances", h.listInstances)
 	mux.HandleFunc("GET /instances/{id}", h.getInstance)
+	mux.HandleFunc("POST /instances/{id}/rotate-token", h.rotateInstanceToken)
 	mux.HandleFunc("DELETE /instances/{id}", h.deleteInstance)
 	mux.HandleFunc("GET /instances/{id}/qr", h.getQR)
 	mux.HandleFunc("GET /instances/{id}/qr.png", h.getQRPNG)
