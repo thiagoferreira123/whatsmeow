@@ -53,6 +53,15 @@ func uazapiWebhookConfigFromInstance(in Instance) uazapiWebhookConfig {
 }
 
 func (h *Handlers) registerUazapiCompat(mux *http.ServeMux) {
+	// Resolve the owner from the credential before invoking the native handler.
+	// No caller-supplied instance ID participates in this routing.
+	mux.HandleFunc("GET /instance/self/status", h.forTokenOwner(h.getStatus))
+	mux.HandleFunc("GET /instance/self/qr.png", h.forTokenOwner(h.getQRPNG))
+	mux.HandleFunc("POST /instance/self/resume", h.forTokenOwner(h.resume))
+	mux.HandleFunc("POST /instance/self/send/text", h.forTokenOwner(h.sendText))
+	mux.HandleFunc("POST /instance/self/send/media", h.forTokenOwner(h.sendMedia))
+	mux.HandleFunc("GET /instance/self/consents/{number}", h.forTokenOwner(h.getConsent))
+	mux.HandleFunc("POST /instance/self/consents", h.forTokenOwner(h.grantConsent))
 	mux.HandleFunc("GET /instance/panel/history", h.uzPanelHistory)
 	mux.HandleFunc("GET /instance/panel/media/{id}", h.uzPanelMedia)
 	mux.HandleFunc("GET /instance/panel/avatar", h.uzPanelAvatar)
@@ -89,6 +98,17 @@ func isUazapiCompatPath(p string) bool {
 		return true
 	}
 	return strings.HasPrefix(p, "/instance/") || strings.HasPrefix(p, "/send/") || strings.HasPrefix(p, "/message/") || strings.HasPrefix(p, "/sender/")
+}
+
+func (h *Handlers) forTokenOwner(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		in, ok := h.uzByToken(w, r)
+		if !ok {
+			return
+		}
+		r.SetPathValue("id", in.ID)
+		next(w, r)
+	}
 }
 
 func (h *Handlers) uzAdminOK(r *http.Request) bool {
