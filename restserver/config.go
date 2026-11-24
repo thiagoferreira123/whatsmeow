@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ type Config struct {
 	LogLevel                  string
 	DSN                       string
 	AdminAPIKey               string // if empty, auth is disabled (local convenience)
+	ProvisioningKeys          map[string]string
 	WebhookSecret             string // default app-secret for the global webhook (HMAC) / legacy x-uazapi-secret
 	WebhookURL                string // initial global webhook URL (overridable in the panel)
 	WebhookVerifyToken        string // global webhook verify token (Cloud API handshake)
@@ -54,6 +56,19 @@ type Config struct {
 }
 
 func loadConfig() Config {
+	var provisioningKeys map[string]string
+	if raw := os.Getenv("PROVISIONING_KEYS_JSON"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &provisioningKeys); err != nil {
+			panic("invalid PROVISIONING_KEYS_JSON")
+		}
+		seen := make(map[string]bool)
+		for owner, key := range provisioningKeys {
+			if strings.TrimSpace(owner) == "" || key == "" || seen[key] || key == os.Getenv("ADMIN_API_KEY") || os.Getenv("ADMIN_API_KEY") == "" {
+				panic("invalid provisioning credential configuration")
+			}
+			seen[key] = true
+		}
+	}
 	return Config{
 		Port:     getenv("PORT", "8080"),
 		LogLevel: strings.ToUpper(strings.TrimSpace(getenv("WA_LOG_LEVEL", "INFO"))),
@@ -63,6 +78,7 @@ func loadConfig() Config {
 		// transactions wait on busy_timeout instead of failing with SQLITE_BUSY.
 		DSN:                    getenv("WHATSMEOW_DSN", "file:whatsmeow.db?_txlock=immediate&_pragma=foreign_keys(on)&_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"),
 		AdminAPIKey:            strings.TrimSpace(os.Getenv("ADMIN_API_KEY")),
+		ProvisioningKeys:       provisioningKeys,
 		WebhookSecret:          getenv("WEBHOOK_SECRET", "dev-secret"),
 		WebhookURL:             strings.TrimSpace(os.Getenv("WEBHOOK_URL")),
 		WebhookVerifyToken:     strings.TrimSpace(os.Getenv("WEBHOOK_VERIFY_TOKEN")),

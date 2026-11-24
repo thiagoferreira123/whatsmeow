@@ -98,7 +98,7 @@ func (h *Handlers) Router() http.Handler {
 	// uazapi wire-compat layer (header auth admintoken/token; see uazapi_compat.go).
 	h.registerUazapiCompat(mux)
 
-	return h.withAuth(h.withRuntimeOwner(mux))
+	return h.withProvisioning(h.withAuth(h.withRuntimeOwner(mux)))
 }
 
 // --- middleware ---
