@@ -204,8 +204,8 @@ func (h *Handlers) uzInit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	in, err := h.mgr.Create(
-		body.Name,
+	in, err := h.mgr.CreateIdempotent(
+		r.Header.Get("Idempotency-Key"), body.Name,
 		body.AdminField01,
 		h.cfg.UazapiCompatWebhookURL,
 		h.cfg.WebhookSecret,

@@ -25,21 +25,22 @@ import (
 // instanceRuntime is the in-memory state for one instance: its persisted meta,
 // the live whatsmeow client, and the current QR code (if pairing).
 type instanceRuntime struct {
-	mu            sync.RWMutex
-	meta          Instance
-	client        *whatsmeow.Client
-	qrCode        string
-	qrExpiresAt   time.Time
-	qrRunning     bool
-	qrCancel      context.CancelFunc
-	qrAttempt     uint64
-	qrStartedAt   time.Time // início da tentativa de pareamento em voo (detecta loop travado)
-	loggedOut     bool      // real unlink (needs a new QR) — watchdog skips it
-	paused        bool      // intentional disconnect — watchdog must NOT reconnect
-	conflicted    bool      // another live client replaced this session
-	resetting     bool      // controlled runtime reset in progress
-	nextConnectAt time.Time // watchdog backoff: don't attempt before this
-	connectFails  int       // consecutive failed watchdog attempts (exponential backoff)
+	qrRequested, relocated bool // Protected by mu. A relocation must never interrupt pairing.
+	mu                     sync.RWMutex
+	meta                   Instance
+	client                 *whatsmeow.Client
+	qrCode                 string
+	qrExpiresAt            time.Time
+	qrRunning              bool
+	qrCancel               context.CancelFunc
+	qrAttempt              uint64
+	qrStartedAt            time.Time // início da tentativa de pareamento em voo (detecta loop travado)
+	loggedOut              bool      // real unlink (needs a new QR) — watchdog skips it
+	paused                 bool      // intentional disconnect — watchdog must NOT reconnect
+	conflicted             bool      // another live client replaced this session
+	resetting              bool      // controlled runtime reset in progress
+	nextConnectAt          time.Time // watchdog backoff: don't attempt before this
+	connectFails           int       // consecutive failed watchdog attempts (exponential backoff)
 }
 
 func (rt *instanceRuntime) metaCopy() Instance {
@@ -648,6 +649,13 @@ func (m *Manager) qrCode(ctx context.Context, id string) (code string, expires t
 	if rt == nil {
 		return "", time.Time{}, "", errNotFound
 	}
+	rt.mu.Lock()
+	if rt.relocated {
+		rt.mu.Unlock()
+		return "", time.Time{}, "", errNotFound
+	}
+	rt.qrRequested = true
+	rt.mu.Unlock()
 	brakesReleased := false
 	for step := 0; step < qrMaxPlanSteps; step++ {
 		snap, cli := m.snapshotQR(rt)

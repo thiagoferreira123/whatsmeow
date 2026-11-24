@@ -530,3 +530,27 @@ func TestUazapiCompatListFoldersIncludesExistingRunningCampaign(t *testing.T) {
 		t.Fatalf("existing campaign history=%#v", folders)
 	}
 }
+
+func TestConditionalRelocationPreservesUsedInstances(t *testing.T) {
+	cfg := Config{AdminAPIKey: "test"}
+	m := testUazapiCompatManager(t, cfg)
+	router := NewHandlers(m, cfg).Router()
+	for _, tc := range []struct {
+		owner     string
+		requested bool
+		want      int
+	}{{"42", false, 204}, {"43", true, 409}, {"46", false, 409}} {
+		in, err := m.Create("nutricionist_"+tc.owner, tc.owner, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.get(in.ID).qrRequested = tc.requested
+		req := httptest.NewRequest("DELETE", "/instances/"+in.ID+"/unused", nil)
+		req.Header.Set("apikey", "test")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != tc.want || (m.get(in.ID) == nil) != (tc.want == 204) {
+			t.Fatalf("owner %s status %d", tc.owner, rec.Code)
+		}
+	}
+}
